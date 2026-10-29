@@ -138,3 +138,13 @@ BeefTV（`glanderness/BeefTV`）是面向 AI 影视与短剧创作的工作台�
 - Git 提交说明使用 `<type>(<scope>): <业务模块> - <变更摘要>`，`type` 为 `feat|fix|refactor|perf|docs|test|build|ci|chore|revert`。
 
 交付前至少检查：改动是否聚焦、调用方和类型是否同步、错误/权限/数据归属是否完整、必要文档是否同步、验证是否如实说明、是否留下密钥或本地数据。
+
+## 10. 二次开发 
+
+当前项目为三方开源项目，现在需要在此工程基础上，结合 [/Users/dajiang/Documents/projects/OpenMontage](https://github.com/dajiang7788/OpenMontage.git) 进行二次开发, 实现一个多剧集短剧的剪辑工作台。 
+
+- 必须遵守当前工程相关技术约定。
+- 原则上保留同步三方更新的能力。
+- 二次开发的首要目标是新增一个主菜单栏，实现一个多剧集短剧的剪辑工作台。
+- 二次开发用`specify`进行，必须遵守`spec` -> `plan` -> `task` -> `implement`的流程。
+- `OpenMontage`包含了众多功能，目前只考虑接入 多剧集短剧的剪辑功能。
