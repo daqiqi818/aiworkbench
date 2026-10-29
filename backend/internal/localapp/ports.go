@@ -4,6 +4,7 @@ import (
 	"context"
 	"mime/multipart"
 
+	"infinite-canvas/backend/internal/dramaedit"
 	"infinite-canvas/backend/internal/model"
 	localproject "infinite-canvas/backend/internal/project"
 	localtask "infinite-canvas/backend/internal/task"
@@ -34,6 +35,15 @@ type TaskPort interface {
 
 type GenerationPort interface {
 	CreateTask(string, localtask.CreateRequest) (*model.Task, error)
+}
+
+type DramaEditingPort interface {
+	Create(string, dramaedit.CreateRequest) (dramaedit.Task, error)
+	List(string, string) ([]dramaedit.Task, error)
+	Get(string, string) (dramaedit.Task, error)
+	Approve(string, string) (dramaedit.Task, error)
+	RequestRevision(string, string, string) (dramaedit.Task, error)
+	Cancel(string, string, string) (dramaedit.Task, error)
 }
 
 type ProviderConfigPort interface {

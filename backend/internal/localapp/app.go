@@ -11,6 +11,7 @@ type Options struct {
 	Assets         AssetPort
 	Tasks          TaskPort
 	Generation     GenerationPort
+	DramaEditing   DramaEditingPort
 	ProviderConfig ProviderConfigPort
 	Lifecycle      Lifecycle
 }
@@ -23,6 +24,7 @@ type App struct {
 	Assets         AssetPort
 	Tasks          TaskPort
 	Generation     GenerationPort
+	DramaEditing   DramaEditingPort
 	ProviderConfig ProviderConfigPort
 
 	lifecycle Lifecycle
@@ -41,6 +43,8 @@ func New(options Options) (*App, error) {
 		missing = "tasks"
 	case options.Generation == nil:
 		missing = "generation"
+	case options.DramaEditing == nil:
+		missing = "drama editing"
 	case options.ProviderConfig == nil:
 		missing = "provider config"
 	case options.Lifecycle == nil:
@@ -51,7 +55,7 @@ func New(options Options) (*App, error) {
 	}
 	return &App{
 		Workspace: options.Workspace, Projects: options.Projects, Assets: options.Assets,
-		Tasks: options.Tasks, Generation: options.Generation, ProviderConfig: options.ProviderConfig,
+		Tasks: options.Tasks, Generation: options.Generation, DramaEditing: options.DramaEditing, ProviderConfig: options.ProviderConfig,
 		lifecycle: options.Lifecycle,
 	}, nil
 }

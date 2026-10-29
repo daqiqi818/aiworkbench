@@ -12,6 +12,7 @@ import (
 	"infinite-canvas/backend/internal/beefapi"
 	"infinite-canvas/backend/internal/conversation"
 	"infinite-canvas/backend/internal/diagnostics"
+	"infinite-canvas/backend/internal/dramaedit"
 	"infinite-canvas/backend/internal/eagle"
 	"infinite-canvas/backend/internal/localapp"
 	"infinite-canvas/backend/internal/model"
@@ -49,6 +50,7 @@ type RuntimeDependencies struct {
 	Projects           localapp.ProjectPort
 	Tasks              localapp.TaskPort
 	Generation         localapp.GenerationPort
+	DramaEditing       localapp.DramaEditingPort
 	Conversations      *conversation.Service
 	// TextReplay is the archive owned by the runtime; legacy callers use its app facade.
 	TextReplay  textreplay.API
@@ -77,6 +79,7 @@ type serviceRuntimeAdapter struct {
 	createTimelineRender        func(string, localtask.TimelineRenderCreateRequest) (*model.Task, error)
 	createTimelineTranscription func(string, localtask.TimelineTranscriptionCreateRequest) (*model.Task, error)
 	createDepthCapture          func(string, localtask.DepthCaptureCreateRequest) (*model.Task, error)
+	dramaEditing                localapp.DramaEditingPort
 }
 
 func newServiceRuntimeAdapter(value *app.Service) serviceRuntimeAdapter {
@@ -87,6 +90,7 @@ func newServiceRuntimeAdapter(value *app.Service) serviceRuntimeAdapter {
 		listProjects: value.ListProjects, tasksWithOptions: value.TasksWithOptions, createTask: value.CreateLocalTask,
 		createTimelineRender: value.CreateTimelineRenderTask, createTimelineTranscription: value.CreateTimelineTranscriptionTask,
 		createDepthCapture: value.CreateDepthCaptureTask,
+		dramaEditing:       value.DramaEditingService(),
 	}
 }
 
@@ -138,6 +142,30 @@ func (a serviceRuntimeAdapter) CreateDepthCaptureTask(userID string, request loc
 	return a.createDepthCapture(userID, request)
 }
 
+func (a serviceRuntimeAdapter) Create(userID string, request dramaedit.CreateRequest) (dramaedit.Task, error) {
+	return a.dramaEditing.Create(userID, request)
+}
+
+func (a serviceRuntimeAdapter) List(userID, status string) ([]dramaedit.Task, error) {
+	return a.dramaEditing.List(userID, status)
+}
+
+func (a serviceRuntimeAdapter) Get(userID, id string) (dramaedit.Task, error) {
+	return a.dramaEditing.Get(userID, id)
+}
+
+func (a serviceRuntimeAdapter) Approve(userID, id string) (dramaedit.Task, error) {
+	return a.dramaEditing.Approve(userID, id)
+}
+
+func (a serviceRuntimeAdapter) RequestRevision(userID, id, note string) (dramaedit.Task, error) {
+	return a.dramaEditing.RequestRevision(userID, id, note)
+}
+
+func (a serviceRuntimeAdapter) Cancel(userID, id, note string) (dramaedit.Task, error) {
+	return a.dramaEditing.Cancel(userID, id, note)
+}
+
 func requestAssetPort(c *gin.Context, fallback *app.Service) localapp.AssetPort {
 	if dependencies, ok := runtimeDependencies(c); ok && dependencies.Assets != nil {
 		return dependencies.Assets
@@ -162,6 +190,13 @@ func requestTaskPort(c *gin.Context, fallback *app.Service) localapp.TaskPort {
 func requestGenerationPort(c *gin.Context, fallback *app.Service) localapp.GenerationPort {
 	if dependencies, ok := runtimeDependencies(c); ok && dependencies.Generation != nil {
 		return dependencies.Generation
+	}
+	return newServiceRuntimeAdapter(fallback)
+}
+
+func requestDramaEditingPort(c *gin.Context, fallback *app.Service) localapp.DramaEditingPort {
+	if dependencies, ok := runtimeDependencies(c); ok && dependencies.DramaEditing != nil {
+		return dependencies.DramaEditing
 	}
 	return newServiceRuntimeAdapter(fallback)
 }

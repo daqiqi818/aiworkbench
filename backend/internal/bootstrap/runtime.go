@@ -143,9 +143,10 @@ func Open(_ context.Context, raw Config) (*Runtime, error) {
 	assetService := svc.ResourceService()
 	projectService := svc.ProjectService()
 	taskService := svc.TaskService()
+	dramaEditingService := svc.DramaEditingService()
 	localRoot, err := localapp.New(localapp.Options{
 		Workspace: workspace.NewService(repo), Projects: projectService, Assets: assetService, Tasks: taskService,
-		Generation: taskService, ProviderConfig: providerConfig, Lifecycle: localKernel,
+		Generation: taskService, DramaEditing: dramaEditingService, ProviderConfig: providerConfig, Lifecycle: localKernel,
 	})
 	if err != nil {
 		cleanupService()
@@ -204,6 +205,7 @@ func Open(_ context.Context, raw Config) (*Runtime, error) {
 		Projects:           localRoot.Projects,
 		Tasks:              localRoot.Tasks,
 		Generation:         localRoot.Generation,
+		DramaEditing:       localRoot.DramaEditing,
 		BeefAPI:            beefAPIConnection,
 		AssistantHost:      assistantHost,
 		Conversations:      conversation.New(conversation.NewStore(repo)),

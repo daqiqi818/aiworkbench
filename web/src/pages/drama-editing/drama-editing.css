@@ -1,0 +1,19 @@
+.drama-editing-page { overflow: auto; }
+.drama-editing-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+.drama-editing-toolbar .ant-select { width: 148px; }
+.drama-editing-list { display: grid; gap: 8px; }
+.drama-editing-task { display: flex; min-height: 76px; width: 100%; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); padding: 14px 16px; text-align: left; }
+.drama-editing-task:hover { background: var(--surface-hover); }
+.drama-editing-task strong, .drama-editing-task small { display: block; }
+.drama-editing-task small { margin-top: 5px; color: var(--foreground-muted); }
+.drama-editing-task-meta { text-align: right; }
+.drama-editing-detail section { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 16px; }
+.drama-editing-detail h2, .drama-editing-detail h3 { margin: 0; }
+.drama-editing-detail dl { display: grid; gap: 6px; margin: 12px 0 0; }
+.drama-editing-detail dt { color: var(--foreground-muted); font-size: var(--fs-caption); }
+.drama-editing-detail dd { margin: 0; }
+.drama-editing-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+.drama-editing-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+.drama-editing-section-heading { display: flex; align-items: center; justify-content: space-between; margin: 8px 0; }
+.drama-editing-episode { display: grid; grid-template-columns: 110px 72px minmax(160px, 1fr) minmax(160px, 1fr) 32px; gap: 8px; align-items: end; margin-bottom: 8px; }
+@media (max-width: 720px) { .drama-editing-form-grid, .drama-editing-episode { grid-template-columns: 1fr; } .drama-editing-task { align-items: flex-start; } }

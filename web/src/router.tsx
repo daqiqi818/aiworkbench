@@ -3,7 +3,7 @@ import { Navigate, Outlet, useLocation, useParams } from "react-router";
 
 import { createWorkspaceRouter } from "@/lib/app-routing";
 import { FullScreenLoader, WorkspaceRouteLoader } from "@/components/ui/aceternity/full-screen-loader";
-import { loadAgentsPage, loadAssetsPage, loadCanvasPage, loadCanvasProjectPage, loadCreatePage, loadHomePage, loadProjectDetailPage } from "@/lib/workspace-route-modules";
+import { loadAgentsPage, loadAssetsPage, loadCanvasPage, loadCanvasProjectPage, loadCreatePage, loadDramaEditingPage, loadHomePage, loadProjectDetailPage } from "@/lib/workspace-route-modules";
 import { CanvasRefreshShell } from "@/pages/canvas/canvas-refresh-shell";
 import RouteErrorPage from "@/pages/route-error";
 import { isLocalWorkspaceMode } from "@/services/workspace-mode";
@@ -14,6 +14,7 @@ const HomePage = lazy(loadHomePage);
 const CanvasPage = lazy(loadCanvasPage);
 const CanvasProjectPage = lazy(loadCanvasProjectPage);
 const CreatePage = lazy(loadCreatePage);
+const DramaEditingPage = lazy(loadDramaEditingPage);
 const NotFound = lazy(() => import("@/pages/not-found"));
 const PluginsPage = lazy(() => import("@/pages/plugins"));
 const EagleLibraryPage = lazy(() => import("@/pages/plugins/eagle"));
@@ -77,6 +78,7 @@ export const router = createWorkspaceRouter([
         children: [
             { path: "/", element: deferred(<HomePage />) },
             { path: "/create", element: deferred(<CreatePage />) },
+			{ path: "/drama-editing", element: deferred(<DramaEditingPage />) },
             {
                 path: "/tasks",
                 // 任务页暂不开放，保留路由以避免旧链接进入半成品界面。

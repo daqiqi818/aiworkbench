@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const CurrentSchemaVersion int64 = 13
+const CurrentSchemaVersion int64 = 14
 
 type localSchemaMigration struct {
 	Version   int64 `gorm:"primaryKey;autoIncrement:false"`
@@ -60,6 +60,7 @@ func LocalModels() []any {
 		&model.CanvasProject{}, &model.CanvasSnapshot{}, &model.CanvasSnapshotResource{}, &model.AgentOpRecord{},
 		&model.AssistantTurn{},
 		&model.CreationConversation{},
+		&model.DramaEditTask{}, &model.DramaEditDecision{},
 		&model.CanvasLibraryFolder{}, &model.CanvasDrawing{},
 		&model.PromptTemplate{}, &model.UserPromptCustomization{},
 		&model.Task{}, &model.CreationRun{}, &model.CreationSubmission{}, &model.TaskTextDelta{}, &model.TaskLog{}, &model.Result{},
@@ -87,6 +88,7 @@ func canonicalLocalMigrations() []localMigration {
 		{version: 11, name: "creation-conversations", apply: migrateCreationConversations},
 		{version: 12, name: "canvas-library-drawings", apply: migrateCanvasLibrarySchema},
 		{version: 13, name: "upload-reservation-witness", apply: migrateUploadReservationWitness},
+		{version: 14, name: "drama-editing-workbench", apply: migrateDramaEditingWorkbench},
 	}
 }
 
@@ -184,6 +186,13 @@ func migrateUploadReservationWitness(tx *gorm.DB) error {
 		return fmt.Errorf("迁移上传预留恢复索引: %w", err)
 	}
 	return backfillUnattributedLegacyUploads(tx)
+}
+
+func migrateDramaEditingWorkbench(tx *gorm.DB) error {
+	if err := tx.AutoMigrate(&model.DramaEditTask{}, &model.DramaEditDecision{}); err != nil {
+		return fmt.Errorf("迁移多剧集剪辑工作台: %w", err)
+	}
+	return nil
 }
 
 func migrateLocalCoreSchema(tx *gorm.DB) error {
@@ -392,6 +401,9 @@ func RequireLocalSchema(db *gorm.DB) error {
 	}
 	if version >= 13 && !db.Migrator().HasTable(&model.UserUploadReservation{}) {
 		return fmt.Errorf("本地工作区数据库结构缺失，请启用自动迁移")
+	}
+	if version >= 14 && (!db.Migrator().HasTable(&model.DramaEditTask{}) || !db.Migrator().HasTable(&model.DramaEditDecision{})) {
+		return fmt.Errorf("本地多剧集剪辑工作台结构缺失，请启用自动迁移")
 	}
 	if version != CurrentSchemaVersion {
 		return fmt.Errorf("本地工作区数据库版本为 %d，期望 %d，请启用自动迁移", version, CurrentSchemaVersion)
