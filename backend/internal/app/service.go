@@ -18,6 +18,7 @@ import (
 	"infinite-canvas/backend/internal/depthcapture"
 	"infinite-canvas/backend/internal/diagnostics"
 	"infinite-canvas/backend/internal/dramaedit"
+	"infinite-canvas/backend/internal/editing"
 	"infinite-canvas/backend/internal/kernel"
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/modelcatalog"
@@ -160,7 +161,9 @@ func newService(repo *repository.Repository, dataDir string, options serviceOpti
 	service.skills = skills.New(service.repo, service.dataDir, service.runWorkerLoop)
 	service.prompts = prompts.New(service.repo, newPromptAdminGate(service))
 	service.projects = localproject.New(repo, localproject.Dependencies{})
-	service.dramaEditing = dramaedit.New(repo)
+	service.dramaEditing = dramaedit.New(repo, dramaedit.ProductionStarterFunc(func(userID string, timeline editing.Project, options editing.Options, operationID string) (*model.Task, error) {
+		return service.CreateTimelineRenderTask(userID, localtask.TimelineRenderCreateRequest{Timeline: timeline, Options: options, ClientOperationID: operationID})
+	}))
 	service.canvas = canvas.New(service.repo, newCanvasHost(service))
 	service.assistantTurns = assistantturns.New(assistantturns.NewStore(service.repo), assistantCanvasFactory{service}, filepath.Join(dataDir, "assistant-turns"))
 	service.assets = localasset.NewService(localasset.Dependencies{

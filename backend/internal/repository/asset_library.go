@@ -38,6 +38,58 @@ type UserAssetFacetRow struct {
 	Count int64
 }
 
+type EpisodeAssetFolderRow struct {
+	FolderID   string
+	FolderName string
+	VideoCount int
+	Videos     []EpisodeAssetVideoRow `gorm:"-"`
+}
+
+type EpisodeAssetVideoRow struct {
+	AssetID    string
+	AssetTitle string
+}
+
+// EpisodeAssetFolders returns only folders that still have at least one active video.
+// It is intentionally owner-scoped so callers cannot turn another user's folder into a task source.
+func (r *Repository) EpisodeAssetFolders(userID string) ([]EpisodeAssetFolderRow, error) {
+	var rows []EpisodeAssetFolderRow
+	err := r.db.Model(&model.AssetFolder{}).
+		Select("asset_folders.id AS folder_id, asset_folders.name AS folder_name, COUNT(assets.id) AS video_count").
+		Joins("JOIN assets ON assets.folder_id = asset_folders.id AND assets.user_id = asset_folders.user_id").
+		Where("asset_folders.user_id = ? AND assets.kind = ? AND assets.status <> ?", userID, "video", model.AssetVersionStatusArchived).
+		Group("asset_folders.id, asset_folders.name, asset_folders.position, asset_folders.created_at").
+		Order("asset_folders.position ASC, asset_folders.created_at ASC").
+		Scan(&rows).Error
+	if err != nil || len(rows) == 0 {
+		return rows, err
+	}
+	folderIDs := make([]string, 0, len(rows))
+	byFolderID := make(map[string]*EpisodeAssetFolderRow, len(rows))
+	for index := range rows {
+		folderIDs = append(folderIDs, rows[index].FolderID)
+		byFolderID[rows[index].FolderID] = &rows[index]
+	}
+	var videos []struct {
+		FolderID   string
+		AssetID    string
+		AssetTitle string
+	}
+	if err := r.db.Model(&model.Asset{}).
+		Select("folder_id, id AS asset_id, title AS asset_title").
+		Where("user_id = ? AND folder_id IN ? AND kind = ? AND status <> ?", userID, folderIDs, "video", model.AssetVersionStatusArchived).
+		Order("folder_id ASC, created_at ASC, id ASC").
+		Scan(&videos).Error; err != nil {
+		return nil, err
+	}
+	for _, video := range videos {
+		if folder := byFolderID[video.FolderID]; folder != nil {
+			folder.Videos = append(folder.Videos, EpisodeAssetVideoRow{AssetID: video.AssetID, AssetTitle: video.AssetTitle})
+		}
+	}
+	return rows, nil
+}
+
 func (r *Repository) UserAssetsPage(userID string, page int, pageSize int, filter UserAssetPageFilter) ([]model.Asset, int64, error) {
 	var assets []model.Asset
 	var total int64

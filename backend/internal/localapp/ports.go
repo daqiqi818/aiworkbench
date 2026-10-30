@@ -38,10 +38,12 @@ type GenerationPort interface {
 }
 
 type DramaEditingPort interface {
+	EpisodeFolders(string) ([]dramaedit.EpisodeFolderCandidate, error)
 	Create(string, dramaedit.CreateRequest) (dramaedit.Task, error)
 	List(string, string) ([]dramaedit.Task, error)
 	Get(string, string) (dramaedit.Task, error)
 	Approve(string, string) (dramaedit.Task, error)
+	StartProduction(string, string) (dramaedit.Task, error)
 	RequestRevision(string, string, string) (dramaedit.Task, error)
 	Cancel(string, string, string) (dramaedit.Task, error)
 }

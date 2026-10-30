@@ -146,6 +146,10 @@ func (a serviceRuntimeAdapter) Create(userID string, request dramaedit.CreateReq
 	return a.dramaEditing.Create(userID, request)
 }
 
+func (a serviceRuntimeAdapter) EpisodeFolders(userID string) ([]dramaedit.EpisodeFolderCandidate, error) {
+	return a.dramaEditing.EpisodeFolders(userID)
+}
+
 func (a serviceRuntimeAdapter) List(userID, status string) ([]dramaedit.Task, error) {
 	return a.dramaEditing.List(userID, status)
 }
@@ -156,6 +160,10 @@ func (a serviceRuntimeAdapter) Get(userID, id string) (dramaedit.Task, error) {
 
 func (a serviceRuntimeAdapter) Approve(userID, id string) (dramaedit.Task, error) {
 	return a.dramaEditing.Approve(userID, id)
+}
+
+func (a serviceRuntimeAdapter) StartProduction(userID, id string) (dramaedit.Task, error) {
+	return a.dramaEditing.StartProduction(userID, id)
 }
 
 func (a serviceRuntimeAdapter) RequestRevision(userID, id, note string) (dramaedit.Task, error) {

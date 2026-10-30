@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const CurrentSchemaVersion int64 = 14
+const CurrentSchemaVersion int64 = 16
 
 type localSchemaMigration struct {
 	Version   int64 `gorm:"primaryKey;autoIncrement:false"`
@@ -89,6 +89,8 @@ func canonicalLocalMigrations() []localMigration {
 		{version: 12, name: "canvas-library-drawings", apply: migrateCanvasLibrarySchema},
 		{version: 13, name: "upload-reservation-witness", apply: migrateUploadReservationWitness},
 		{version: 14, name: "drama-editing-workbench", apply: migrateDramaEditingWorkbench},
+		{version: 15, name: "drama-editing-episode-folders", apply: migrateDramaEditingEpisodeFolders},
+		{version: 16, name: "drama-editing-production-execution", apply: migrateDramaEditingProductionExecution},
 	}
 }
 
@@ -191,6 +193,22 @@ func migrateUploadReservationWitness(tx *gorm.DB) error {
 func migrateDramaEditingWorkbench(tx *gorm.DB) error {
 	if err := tx.AutoMigrate(&model.DramaEditTask{}, &model.DramaEditDecision{}); err != nil {
 		return fmt.Errorf("迁移多剧集剪辑工作台: %w", err)
+	}
+	return nil
+}
+
+// v15 preserves the existing JSON-backed task table while recording the amended
+// folder-backed episode and duration-range contract for existing local workspaces.
+func migrateDramaEditingEpisodeFolders(tx *gorm.DB) error {
+	if err := tx.AutoMigrate(&model.DramaEditTask{}, &model.DramaEditDecision{}); err != nil {
+		return fmt.Errorf("迁移多剧集剪辑文件夹任务: %w", err)
+	}
+	return nil
+}
+
+func migrateDramaEditingProductionExecution(tx *gorm.DB) error {
+	if err := tx.AutoMigrate(&model.DramaEditTask{}); err != nil {
+		return fmt.Errorf("迁移多剧集剪辑制作执行: %w", err)
 	}
 	return nil
 }

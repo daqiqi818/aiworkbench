@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"infinite-canvas/backend/internal/dramaedit"
 	"infinite-canvas/backend/internal/model"
 	localproject "infinite-canvas/backend/internal/project"
 	localtask "infinite-canvas/backend/internal/task"
@@ -36,12 +37,26 @@ func (fakePorts) CreateDepthCaptureTask(string, localtask.DepthCaptureCreateRequ
 	return nil, nil
 }
 
-func (fakePorts) CreateTask(string, localtask.CreateRequest) (*model.Task, error) { return nil, nil }
-func (fakePorts) ReadLocalModelConfig() ([]byte, error)                           { return nil, nil }
-func (fakePorts) SaveLocalModelConfig([]byte) error                               { return nil }
-func (fakePorts) StartWorker()                                                    {}
-func (fakePorts) StopWorker(context.Context) error                                { return nil }
-func (fakePorts) Close() error                                                    { return nil }
+func (fakePorts) CreateTask(string, localtask.CreateRequest) (*model.Task, error)   { return nil, nil }
+func (fakePorts) EpisodeFolders(string) ([]dramaedit.EpisodeFolderCandidate, error) { return nil, nil }
+func (fakePorts) Create(string, dramaedit.CreateRequest) (dramaedit.Task, error) {
+	return dramaedit.Task{}, nil
+}
+func (fakePorts) List(string, string) ([]dramaedit.Task, error)  { return nil, nil }
+func (fakePorts) Get(string, string) (dramaedit.Task, error)     { return dramaedit.Task{}, nil }
+func (fakePorts) Approve(string, string) (dramaedit.Task, error) { return dramaedit.Task{}, nil }
+func (fakePorts) StartProduction(string, string) (dramaedit.Task, error) {
+	return dramaedit.Task{}, nil
+}
+func (fakePorts) RequestRevision(string, string, string) (dramaedit.Task, error) {
+	return dramaedit.Task{}, nil
+}
+func (fakePorts) Cancel(string, string, string) (dramaedit.Task, error) { return dramaedit.Task{}, nil }
+func (fakePorts) ReadLocalModelConfig() ([]byte, error)                 { return nil, nil }
+func (fakePorts) SaveLocalModelConfig([]byte) error                     { return nil }
+func (fakePorts) StartWorker()                                          {}
+func (fakePorts) StopWorker(context.Context) error                      { return nil }
+func (fakePorts) Close() error                                          { return nil }
 
 var (
 	_ TaskPort       = fakePorts{}
@@ -67,7 +82,7 @@ func TestNewRequiresEveryLocalPort(t *testing.T) {
 	ports := fakePorts{}
 	valid := Options{
 		Workspace: ports, Projects: ports, Assets: ports, Tasks: ports,
-		Generation: ports, ProviderConfig: ports, Lifecycle: ports,
+		Generation: ports, DramaEditing: ports, ProviderConfig: ports, Lifecycle: ports,
 	}
 	app, err := New(valid)
 	if err != nil || app == nil {
@@ -83,6 +98,7 @@ func TestNewRequiresEveryLocalPort(t *testing.T) {
 		{"assets", func(o *Options) { o.Assets = nil }},
 		{"tasks", func(o *Options) { o.Tasks = nil }},
 		{"generation", func(o *Options) { o.Generation = nil }},
+		{"drama editing", func(o *Options) { o.DramaEditing = nil }},
 		{"provider config", func(o *Options) { o.ProviderConfig = nil }},
 		{"lifecycle", func(o *Options) { o.Lifecycle = nil }},
 	}

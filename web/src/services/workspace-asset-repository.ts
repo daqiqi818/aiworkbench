@@ -5,6 +5,7 @@ import { deleteWorkspaceAssetRecord, putWorkspaceAsset } from "@/services/api/wo
 import { normalizeAssetCategory } from "@/lib/asset-category";
 import { assertUserScope, captureUserScope, userScopeMatches, UserScopeAbandonedError, type CapturedUserScope } from "@/lib/user-scope-guard";
 import { usesBrowserLocalResourceStore, workspaceAssetHasCanonicalMediaPersist } from "@/services/workspace-resource-storage";
+import { migrateBrowserLocalAssetFolders } from "@/services/workspace-asset-folders";
 import { loadWorkspaceAssetsForUse } from "@/services/workspace-asset-read";
 import {
     ackAssetStoreDraft,
@@ -260,6 +261,11 @@ export async function deleteWorkspaceAsset(id: string, expectedScope?: CapturedU
         await flushAssetStorePersistence(expected);
         const draft = peekAssetStoreDraft(expected.userScope, assetId);
         if (draft) ackAssetStoreDraft(expected, assetId, draft.version);
+        try {
+            await deleteWorkspaceAssetRecord(assetId, { expectedScope: expected });
+        } catch (error) {
+            if (!isNotFoundAssetError(error)) throw error;
+        }
         return;
     }
 
@@ -418,7 +424,17 @@ export async function persistWorkspaceAssetChanges(expectedScope?: CapturedUserS
         const snapshot = readAssetStoreDrafts(expected);
         await flushAssetStorePersistence(expected);
         assertUserScope(expected);
-        for (const draft of [...snapshot.upserts, ...snapshot.deletes]) ackAssetStoreDraft(expected, draft.id, draft.version);
+        await migrateBrowserLocalAssetFolders(expected);
+        assertUserScope(expected);
+        for (const asset of useAssetStore.getState().assets) {
+            if (asset.kind === "entity" || !workspaceAssetHasCanonicalMediaPersist(asset)) continue;
+            const saved = await putWorkspaceAsset(asset.id, asset, { expectedScope: expected });
+            assertAssetWriteReceipt(saved?.asset, asset.id);
+            assertUserScope(expected);
+        }
+        for (const draft of snapshot.upserts) ackAssetStoreDraft(expected, draft.id, draft.version);
+        // Browser-local media can be deleted only after its local record has been removed. The
+        // existing delete path handles that physical ordering, so retain delete intents here.
         return;
     }
 

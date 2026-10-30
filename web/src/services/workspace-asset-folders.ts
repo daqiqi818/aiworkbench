@@ -5,6 +5,7 @@ import {
     deleteAssetFolder,
     listAssetFolders,
     moveAssetsToFolder,
+    putWorkspaceAsset,
     updateAssetFolder,
     type AssetFolder,
 } from "@/services/api/workspace-data";
@@ -13,9 +14,12 @@ import { flushAssetStorePersistence, runAssetStoreProjection, useAssetStore } fr
 
 export const WORKSPACE_ASSET_FOLDERS_KEY = "infinite-canvas:asset-folders";
 
-/** Folder name/hierarchy is a SQLite AssetFolder. Browser-local has no Go library, so IDB remains the product path. */
+/**
+ * Asset folders always use the local backend identity. Browser-local media remains in IndexedDB,
+ * but its metadata has to be visible to owner-scoped workflows such as drama editing.
+ */
 export function usesWorkspaceAssetFolderApi() {
-    return !usesBrowserLocalResourceStore();
+    return true;
 }
 
 function parseLocalFolders(raw: string | null): AssetFolder[] {
@@ -38,16 +42,10 @@ async function writeLocalFolders(userScope: string, folders: AssetFolder[]) {
     return folders;
 }
 
-function newLocalFolderId() {
-    return `asset-folder-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
-}
-
 export async function listWorkspaceAssetFolders(expectedScope?: CapturedUserScope) {
     const expected = expectedScope ?? captureUserScope();
     assertUserScope(expected);
-    const folders = !usesWorkspaceAssetFolderApi()
-        ? await readLocalFolders(expected.userScope)
-        : (await listAssetFolders({ expectedScope: expected })).folders;
+    const folders = (await listAssetFolders({ expectedScope: expected })).folders;
     assertUserScope(expected);
     return folders;
 }
@@ -57,14 +55,6 @@ export async function createWorkspaceAssetFolder(name: string, expectedScope?: C
     assertUserScope(expected);
     const trimmed = name.trim();
     if (!trimmed) throw new Error("请输入分类名称");
-    if (!usesWorkspaceAssetFolderApi()) {
-        const folders = await readLocalFolders(expected.userScope);
-        assertUserScope(expected);
-        const now = new Date().toISOString();
-        const folder: AssetFolder = { id: newLocalFolderId(), name: trimmed, position: folders.length, createdAt: now, updatedAt: now };
-        await writeLocalFolders(expected.userScope, [...folders, folder]);
-        return folder;
-    }
     return (await createAssetFolder(trimmed, { expectedScope: expected })).folder;
 }
 
@@ -75,14 +65,6 @@ export async function renameWorkspaceAssetFolder(id: string, name: string, expec
     const trimmed = name.trim();
     if (!folderId) throw new Error("素材分类 ID 不能为空");
     if (!trimmed) throw new Error("请输入分类名称");
-    if (!usesWorkspaceAssetFolderApi()) {
-        const folders = await readLocalFolders(expected.userScope);
-        assertUserScope(expected);
-        const now = new Date().toISOString();
-        const next = folders.map((folder) => (folder.id === folderId ? { ...folder, name: trimmed, updatedAt: now } : folder));
-        await writeLocalFolders(expected.userScope, next);
-        return next.find((folder) => folder.id === folderId);
-    }
     return (await updateAssetFolder(folderId, trimmed, { expectedScope: expected })).folder;
 }
 
@@ -91,13 +73,7 @@ export async function deleteWorkspaceAssetFolder(id: string, expectedScope?: Cap
     assertUserScope(expected);
     const folderId = id.trim();
     if (!folderId) throw new Error("素材分类 ID 不能为空");
-    if (!usesWorkspaceAssetFolderApi()) {
-        const folders = await readLocalFolders(expected.userScope);
-        assertUserScope(expected);
-        await writeLocalFolders(expected.userScope, folders.filter((folder) => folder.id !== folderId));
-    } else {
-        await deleteAssetFolder(folderId, { expectedScope: expected });
-    }
+    await deleteAssetFolder(folderId, { expectedScope: expected });
     assertUserScope(expected);
     runAssetStoreProjection(() => {
         const store = useAssetStore.getState();
@@ -113,16 +89,75 @@ export async function assignWorkspaceAssetsFolder(assetIds: string[], folderId =
     const ids = assetIds.map((id) => id.trim()).filter(Boolean);
     if (!ids.length) return;
     const nextFolderId = folderId.trim();
-    if (usesWorkspaceAssetFolderApi()) {
-        await moveAssetsToFolder(ids, nextFolderId, { expectedScope: expected });
+    if (usesBrowserLocalResourceStore()) {
+        await migrateBrowserLocalAssetFolders(expected);
         assertUserScope(expected);
+        for (const id of ids) {
+            const asset = useAssetStore.getState().assets.find((item) => item.id === id);
+            if (!asset || asset.kind === "entity") continue;
+            // Browser-local files already live in IndexedDB; mirror only their metadata before
+            // asking the backend to change the folder relation.
+            await putWorkspaceAsset(id, asset, { expectedScope: expected });
+            assertUserScope(expected);
+        }
+    }
+    await moveAssetsToFolder(ids, nextFolderId, { expectedScope: expected });
+    assertUserScope(expected);
+    runAssetStoreProjection(() => {
+        const store = useAssetStore.getState();
+        for (const id of ids) store.updateAsset(id, { folderId: nextFolderId || undefined });
+    });
+    await flushAssetStorePersistence(expected);
+}
+
+function folderNameKey(name: string) {
+    return name.trim().toLocaleLowerCase();
+}
+
+/**
+ * Older browser-local sessions created folder IDs only in IndexedDB. Migrate those
+ * IDs to backend folder IDs by name, then rebind in-memory assets before their
+ * metadata is mirrored. Media blobs are intentionally not read or uploaded here.
+ */
+export async function migrateBrowserLocalAssetFolders(expectedScope?: CapturedUserScope) {
+    const expected = expectedScope ?? captureUserScope();
+    assertUserScope(expected);
+    if (!usesBrowserLocalResourceStore()) return new Map<string, string>();
+
+    const legacyFolders = await readLocalFolders(expected.userScope);
+    assertUserScope(expected);
+    if (!legacyFolders.length) return new Map<string, string>();
+
+    const remote = (await listAssetFolders({ expectedScope: expected })).folders;
+    assertUserScope(expected);
+    const byName = new Map(remote.map((folder) => [folderNameKey(folder.name), folder]));
+    const rebound = new Map<string, string>();
+    const canonical: AssetFolder[] = [];
+
+    for (const legacy of legacyFolders) {
+        const key = folderNameKey(legacy.name);
+        if (!key) continue;
+        let folder = byName.get(key);
+        if (!folder) {
+            folder = (await createAssetFolder(legacy.name, { expectedScope: expected })).folder;
+            assertUserScope(expected);
+            byName.set(key, folder);
+        }
+        rebound.set(legacy.id, folder.id);
+        canonical.push(folder);
+    }
+
+    await writeLocalFolders(expected.userScope, canonical);
+    assertUserScope(expected);
+    if (rebound.size) {
         runAssetStoreProjection(() => {
             const store = useAssetStore.getState();
-            for (const id of ids) store.updateAsset(id, { folderId: nextFolderId || undefined });
+            for (const asset of store.assets) {
+                const folderId = asset.folderId ? rebound.get(asset.folderId) : undefined;
+                if (folderId && folderId !== asset.folderId) store.updateAsset(asset.id, { folderId });
+            }
         });
-        return;
+        await flushAssetStorePersistence(expected);
     }
-    const store = useAssetStore.getState();
-    for (const id of ids) store.updateAsset(id, { folderId: nextFolderId || undefined });
-    await flushAssetStorePersistence(expected);
+    return rebound;
 }

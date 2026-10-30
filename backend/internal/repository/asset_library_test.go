@@ -48,6 +48,40 @@ func TestUserAssetsPagePaginatesAndIsolatesUsers(t *testing.T) {
 	}
 }
 
+func TestEpisodeAssetFoldersReturnsOwnedActiveVideoFolders(t *testing.T) {
+	repo, db := newAssetLibraryTestRepository(t)
+	now := time.Now().UTC()
+	for _, folder := range []model.AssetFolder{
+		{ID: "episode-2", UserID: "owner", Name: "第 2 集", NameKey: "第 2 集", Position: 2, CreatedAt: now, UpdatedAt: now},
+		{ID: "episode-1", UserID: "owner", Name: "第 1 集", NameKey: "第 1 集", Position: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "archived", UserID: "owner", Name: "归档", NameKey: "归档", Position: 3, CreatedAt: now, UpdatedAt: now},
+		{ID: "foreign", UserID: "other", Name: "外部", NameKey: "外部", Position: 0, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := db.Create(&folder).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, asset := range []model.Asset{
+		{ID: "video-1", UserID: "owner", FolderID: "episode-1", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusConfirmed, Title: "第 1 集", PayloadJSON: "{}", CreatedAt: now, UpdatedAt: now},
+		{ID: "video-2", UserID: "owner", FolderID: "episode-2", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusConfirmed, Title: "第 2 集", PayloadJSON: "{}", CreatedAt: now, UpdatedAt: now},
+		{ID: "video-3", UserID: "owner", FolderID: "episode-2", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusReview, Title: "第 2 集补充", PayloadJSON: "{}", CreatedAt: now, UpdatedAt: now},
+		{ID: "archived-video", UserID: "owner", FolderID: "archived", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusArchived, Title: "归档", PayloadJSON: "{}", CreatedAt: now, UpdatedAt: now},
+		{ID: "foreign-video", UserID: "other", FolderID: "foreign", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusConfirmed, Title: "外部", PayloadJSON: "{}", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := db.Create(&asset).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rows, err := repo.EpisodeAssetFolders("owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].FolderID != "episode-1" || rows[1].FolderID != "episode-2" || rows[1].VideoCount != 2 || len(rows[1].Videos) != 2 || rows[1].Videos[0].AssetID != "video-2" {
+		t.Fatalf("episode folders = %#v", rows)
+	}
+}
+
 func TestDeleteAssetFolderMovesAssetsToUncategorized(t *testing.T) {
 	repo, db := newAssetLibraryTestRepository(t)
 	now := time.Now().UTC()

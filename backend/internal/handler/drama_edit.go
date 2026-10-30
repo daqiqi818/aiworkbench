@@ -12,6 +12,19 @@ import (
 )
 
 func RegisterDramaEditingRoutes(r *gin.RouterGroup, svc *app.Service) {
+	r.GET("/drama-editing/episode-folders", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		folders, err := requestDramaEditingPort(c, svc).EpisodeFolders(user.ID)
+		if err != nil {
+			failDramaEditing(c, err)
+			return
+		}
+		ok(c, gin.H{"folders": folders})
+	})
 	r.GET("/drama-editing/tasks", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {
@@ -70,6 +83,22 @@ func RegisterDramaEditingRoutes(r *gin.RouterGroup, svc *app.Service) {
 			return
 		}
 		task, err := requestDramaEditingPort(c, svc).Approve(user.ID, c.Param("id"))
+		if err != nil {
+			failDramaEditing(c, err)
+			return
+		}
+		ok(c, task)
+	})
+	r.POST("/drama-editing/tasks/:id/start", func(c *gin.Context) {
+		if !requireTrustedDesktopWritePrincipal(c, "剪辑任务只能由当前桌面界面开始制作") {
+			return
+		}
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		task, err := requestDramaEditingPort(c, svc).StartProduction(user.ID, c.Param("id"))
 		if err != nil {
 			failDramaEditing(c, err)
 			return

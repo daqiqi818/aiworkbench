@@ -195,7 +195,11 @@ function AssetsPageSession() {
 
     const foldersQuery = useQuery({
         queryKey: assetFolderQueryKey(entryScope),
-        queryFn: ({ queryKey }) => listWorkspaceAssetFolders(expectedScopeFromQueryKey(queryKey)),
+        queryFn: async ({ queryKey }) => {
+            const scope = expectedScopeFromQueryKey(queryKey);
+            await persistWorkspaceAssetChanges(scope);
+            return await listWorkspaceAssetFolders(scope);
+        },
         enabled: folderApi,
     });
     useEffect(() => {
@@ -948,6 +952,30 @@ function AssetsPageSession() {
                                     <button type="button" aria-pressed={folderFilter === "uncategorized"} className={`assets-filter-item ${folderFilter === "uncategorized" ? "is-active" : ""}`} onClick={() => { setFolderFilter("uncategorized"); setPage(1); }}>
                                         <span className="assets-filter-item-label">未分类</span><span className="assets-filter-count">{remoteReady ? folderCounts[""] ?? 0 : activeAssets.filter((asset) => !asset.folderId).length}</span>
                                     </button>
+                                    {folderEditor === "new" ? (
+                                        <div className="assets-folder-row assets-folder-create-row">
+                                            <Input
+                                                autoFocus
+                                                size="small"
+                                                className="assets-folder-inline-input"
+                                                value={folderName}
+                                                maxLength={40}
+                                                disabled={folderSaving}
+                                                aria-label="新建文件夹名称"
+                                                placeholder="剧集文件夹名称"
+                                                onChange={(event) => setFolderName(event.target.value)}
+                                                onPressEnter={() => void saveFolder()}
+                                                onKeyDown={(event) => {
+                                                    if (event.key === "Escape") {
+                                                        setFolderEditor(null);
+                                                        setFolderName("");
+                                                    }
+                                                }}
+                                            />
+                                            <button type="button" className="assets-folder-confirm" title="创建文件夹" aria-label="创建文件夹" disabled={folderSaving || !folderName.trim()} onClick={() => void saveFolder()}><Check className="size-3.5" /></button>
+                                            <button type="button" className="assets-folder-cancel" title="取消新建文件夹" aria-label="取消新建文件夹" disabled={folderSaving} onClick={() => { setFolderEditor(null); setFolderName(""); }}><X className="size-3.5" /></button>
+                                        </div>
+                                    ) : null}
                                     {folders.map((folder) => (
                                         <Dropdown
                                             key={folder.id}

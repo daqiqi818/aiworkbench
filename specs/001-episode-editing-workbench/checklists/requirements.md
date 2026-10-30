@@ -34,3 +34,7 @@
 - Reviewed against the current product boundaries and the existing OpenMontage multi-episode
   short-drama workflow on 2026-10-29.
 - No clarification is required before planning; implementation design belongs to the planning phase.
+- Revalidated after adding asset-folder-backed episode selection, restricted delivery choices,
+  duration ranges, and a compact task-creation workflow on 2026-10-29.
+- Revalidated after adding browser-local asset metadata synchronization requirements; the amendment
+  remains user-focused and does not prescribe media transport implementation details.

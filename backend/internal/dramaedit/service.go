@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"infinite-canvas/backend/internal/assets"
+	"infinite-canvas/backend/internal/editing"
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/repository"
 )
@@ -21,11 +23,18 @@ type ValidationError struct{ Message string }
 func (e *ValidationError) Error() string { return e.Message }
 
 type Service struct {
-	repo  *repository.Repository
-	store *store
+	repo       *repository.Repository
+	store      *store
+	production ProductionStarter
 }
 
-func New(repo *repository.Repository) *Service { return &Service{repo: repo, store: newStore(repo)} }
+func New(repo *repository.Repository, production ...ProductionStarter) *Service {
+	service := &Service{repo: repo, store: newStore(repo)}
+	if len(production) > 0 {
+		service.production = production[0]
+	}
+	return service
+}
 
 func (s *Service) Create(userID string, request CreateRequest) (Task, error) {
 	if strings.TrimSpace(userID) == "" {
@@ -34,10 +43,14 @@ func (s *Service) Create(userID string, request CreateRequest) (Task, error) {
 	if err := validateRequest(&request); err != nil {
 		return Task{}, err
 	}
+	episodes, err := s.selectedEpisodes(userID, request.EpisodeAssetIDs)
+	if err != nil {
+		return Task{}, err
+	}
 	delivery, _ := json.Marshal(request.DeliveryPreferences)
 	spoiler, _ := json.Marshal(request.SpoilerPolicy)
-	episodes, _ := json.Marshal(request.Episodes)
-	proposal := buildProposal(request)
+	episodesJSON, _ := json.Marshal(episodes)
+	proposal := buildProposal(request, episodes)
 	proposalJSON, _ := json.Marshal(proposal)
 	id, err := nextID(s.repo, "DE")
 	if err != nil {
@@ -48,12 +61,19 @@ func (s *Service) Create(userID string, request CreateRequest) (Task, error) {
 		return Task{}, err
 	}
 	timestamp := now()
-	stored := model.DramaEditTask{ID: id, UserID: userID, DramaTitle: request.DramaTitle, CampaignObjective: request.CampaignObjective, TargetAudience: request.TargetAudience, DeliveryJSON: string(delivery), SpoilerJSON: string(spoiler), EpisodesJSON: string(episodes), ProposalJSON: string(proposalJSON), Status: model.DramaEditStatusAwaitingApproval, Stage: "等待审核", NextAction: "审核剪辑方案后批准、请求修改或取消", CreatedAt: timestamp, UpdatedAt: timestamp}
+	stored := model.DramaEditTask{ID: id, UserID: userID, DramaTitle: request.DramaTitle, DeliveryJSON: string(delivery), SpoilerJSON: string(spoiler), EpisodesJSON: string(episodesJSON), ProposalJSON: string(proposalJSON), Status: model.DramaEditStatusAwaitingApproval, Stage: "等待审核", NextAction: "审核剪辑方案后批准、请求修改或取消", CreatedAt: timestamp, UpdatedAt: timestamp}
 	decision := model.DramaEditDecision{ID: decisionID, TaskID: id, UserID: userID, Action: "created", CreatedAt: timestamp}
 	if err := s.store.create(&stored, &decision); err != nil {
 		return Task{}, err
 	}
 	return decodeTask(stored, []model.DramaEditDecision{decision})
+}
+
+func (s *Service) EpisodeFolders(userID string) ([]EpisodeFolderCandidate, error) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, &ValidationError{Message: "当前用户无效"}
+	}
+	return s.store.episodeFolders(userID)
 }
 
 func (s *Service) List(userID, status string) ([]Task, error) {
@@ -66,7 +86,7 @@ func (s *Service) List(userID, status string) ([]Task, error) {
 	}
 	result := make([]Task, 0, len(items))
 	for _, item := range items {
-		task, decodeErr := decodeTask(item, nil)
+		task, decodeErr := s.projectTask(item)
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
@@ -84,11 +104,27 @@ func (s *Service) Get(userID, id string) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	return decodeTask(*stored, decisions)
+	result, err := s.projectTask(*stored)
+	if err != nil {
+		return Task{}, err
+	}
+	result.Decisions = nil
+	for _, item := range decisions {
+		result.Decisions = append(result.Decisions, Decision{ID: item.ID, Action: item.Action, Note: item.Note, CreatedAt: item.CreatedAt})
+	}
+	return result, nil
 }
 
 func (s *Service) Approve(userID, id string) (Task, error) {
-	return s.decide(userID, id, "approved", "", []model.DramaEditStatus{model.DramaEditStatusAwaitingApproval, model.DramaEditStatusRevisionRequested})
+	task, err := s.decide(userID, id, "approved", "", []model.DramaEditStatus{model.DramaEditStatusAwaitingApproval, model.DramaEditStatusRevisionRequested})
+	if err != nil {
+		return Task{}, err
+	}
+	return s.startProduction(userID, task.ID, false)
+}
+
+func (s *Service) StartProduction(userID, id string) (Task, error) {
+	return s.startProduction(userID, id, true)
 }
 func (s *Service) Cancel(userID, id, note string) (Task, error) {
 	return s.decide(userID, id, "cancelled", strings.TrimSpace(note), []model.DramaEditStatus{model.DramaEditStatusAwaitingApproval, model.DramaEditStatusRevisionRequested, model.DramaEditStatusApproved, model.DramaEditStatusBlocked})
@@ -113,7 +149,7 @@ func (s *Service) decide(userID, id, action, note string, allowed []model.DramaE
 	timestamp := now()
 	switch action {
 	case "approved":
-		task.Status, task.Stage, task.NextAction = model.DramaEditStatusApproved, "已批准", "剪辑执行器尚未接入；当前方案已锁定，等待执行"
+		task.Status, task.Stage, task.NextAction = model.DramaEditStatusApproved, "已批准", "正在创建本地制作工作"
 	case "revision_requested":
 		task.Status, task.Stage, task.NextAction = model.DramaEditStatusRevisionRequested, "等待方案修改", "查看修改说明并重新审核方案"
 	case "cancelled":
@@ -134,84 +170,85 @@ func (s *Service) decide(userID, id, action, note string, allowed []model.DramaE
 }
 
 func validateRequest(request *CreateRequest) error {
-	request.DramaTitle, request.CampaignObjective, request.TargetAudience = strings.TrimSpace(request.DramaTitle), strings.TrimSpace(request.CampaignObjective), strings.TrimSpace(request.TargetAudience)
-	if !between(request.DramaTitle, 1, 200) || !between(request.CampaignObjective, 1, 1000) || !between(request.TargetAudience, 1, 1000) {
-		return &ValidationError{Message: "短剧名称、剪辑目标和目标受众不能为空且长度必须有效"}
+	request.DramaTitle = strings.TrimSpace(request.DramaTitle)
+	if !between(request.DramaTitle, 1, 200) {
+		return &ValidationError{Message: "短剧名称不能为空且长度必须有效"}
 	}
 	if request.DeliveryPreferences.AspectRatio != "9:16" && request.DeliveryPreferences.AspectRatio != "16:9" && request.DeliveryPreferences.AspectRatio != "1:1" {
 		return &ValidationError{Message: "画幅比例无效"}
 	}
-	if request.DeliveryPreferences.TargetDurationSecond < 10 || request.DeliveryPreferences.TargetDurationSecond > 180 || strings.TrimSpace(request.DeliveryPreferences.Language) == "" || strings.TrimSpace(request.DeliveryPreferences.DestinationLabel) == "" {
-		return &ValidationError{Message: "交付偏好无效"}
+	if request.DeliveryPreferences.MinDurationSeconds < 15 || request.DeliveryPreferences.MinDurationSeconds > 300 || request.DeliveryPreferences.MaxDurationSeconds < 15 || request.DeliveryPreferences.MaxDurationSeconds > 300 || request.DeliveryPreferences.MinDurationSeconds > request.DeliveryPreferences.MaxDurationSeconds {
+		return &ValidationError{Message: "目标时长范围必须在 15 到 300 秒之间，且最小值不能大于最大值"}
+	}
+	if request.DeliveryPreferences.Language != "zh" && request.DeliveryPreferences.Language != "en" {
+		return &ValidationError{Message: "仅支持中文或英文"}
+	}
+	if request.DeliveryPreferences.Platform != "tiktok" && request.DeliveryPreferences.Platform != "facebook" && request.DeliveryPreferences.Platform != "wechat_channels" && request.DeliveryPreferences.Platform != "douyin" {
+		return &ValidationError{Message: "投放平台无效"}
 	}
 	if request.SpoilerPolicy.Policy != "no-major-spoilers" && request.SpoilerPolicy.Policy != "limited-spoilers" && request.SpoilerPolicy.Policy != "approved-spoilers" {
 		return &ValidationError{Message: "剧透策略无效"}
 	}
-	if len(request.Episodes) < 2 || len(request.Episodes) > 12 {
+	if len(request.EpisodeAssetIDs) < 2 || len(request.EpisodeAssetIDs) > 12 {
 		return &ValidationError{Message: "每项剪辑任务必须包含 2 到 12 集"}
 	}
-	ids, positions, included := map[string]struct{}{}, map[int]struct{}{}, 0
-	for index := range request.Episodes {
-		episode := &request.Episodes[index]
-		episode.EpisodeID, episode.Summary = strings.TrimSpace(episode.EpisodeID), strings.TrimSpace(episode.Summary)
-		if episode.EpisodeID == "" || episode.Summary == "" || episode.SequenceNumber < 1 {
-			return &ValidationError{Message: "剧集编号、顺序和摘要不能为空"}
+	seen := make(map[string]struct{}, len(request.EpisodeAssetIDs))
+	for index, id := range request.EpisodeAssetIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || len(id) > 80 {
+			return &ValidationError{Message: "剧集视频无效"}
 		}
-		if _, exists := ids[episode.EpisodeID]; exists {
-			return &ValidationError{Message: "剧集编号不能重复"}
+		if _, exists := seen[id]; exists {
+			return &ValidationError{Message: "剧集视频不能重复"}
 		}
-		ids[episode.EpisodeID] = struct{}{}
-		if _, exists := positions[episode.SequenceNumber]; exists {
-			return &ValidationError{Message: "剧集顺序不能重复"}
-		}
-		positions[episode.SequenceNumber] = struct{}{}
-		if episode.Inclusion != "included" && episode.Inclusion != "excluded" {
-			return &ValidationError{Message: "剧集纳入状态无效"}
-		}
-		if episode.Inclusion == "included" {
-			included++
-		} else if strings.TrimSpace(episode.ExclusionReason) == "" {
-			return &ValidationError{Message: "排除剧集必须说明原因"}
-		}
-		if len(episode.Sources) == 0 {
-			return &ValidationError{Message: "每集至少需要一个素材引用"}
-		}
-		for sourceIndex := range episode.Sources {
-			source := &episode.Sources[sourceIndex]
-			source.Reference = strings.TrimSpace(source.Reference)
-			if source.Reference == "" || !source.RightsConfirmed {
-				return &ValidationError{Message: "所有素材必须有引用且已确认使用权限"}
-			}
-		}
-	}
-	if included < 2 {
-		return &ValidationError{Message: "至少需要纳入两集素材"}
+		seen[id] = struct{}{}
+		request.EpisodeAssetIDs[index] = id
 	}
 	return nil
 }
 
-func buildProposal(request CreateRequest) Proposal {
-	episodes := append([]Episode(nil), request.Episodes...)
+func (s *Service) selectedEpisodes(userID string, ids []string) ([]Episode, error) {
+	candidates, err := s.store.episodeFolders(userID)
+	if err != nil {
+		return nil, err
+	}
+	type source struct {
+		folder EpisodeFolderCandidate
+		video  EpisodeAssetCandidate
+	}
+	byID := make(map[string]source)
+	for _, candidate := range candidates {
+		for _, video := range candidate.Videos {
+			byID[video.AssetID] = source{folder: candidate, video: video}
+		}
+	}
+	episodes := make([]Episode, 0, len(ids))
+	for index, id := range ids {
+		source, ok := byID[id]
+		if !ok {
+			return nil, &ValidationError{Message: "所选剧集视频不存在、无权访问或已不可用"}
+		}
+		episodes = append(episodes, Episode{FolderID: source.folder.FolderID, FolderName: source.folder.FolderName, AssetID: source.video.AssetID, AssetTitle: source.video.AssetTitle, SequenceNumber: index + 1})
+	}
+	return episodes, nil
+}
+
+func buildProposal(request CreateRequest, selected []Episode) Proposal {
+	episodes := append([]Episode(nil), selected...)
 	sort.Slice(episodes, func(i, j int) bool { return episodes[i].SequenceNumber < episodes[j].SequenceNumber })
-	coverage, excluded, limitations := []string{}, []string{}, []string{}
+	coverage, limitations := []string{}, []string{}
 	for _, episode := range episodes {
-		if episode.Inclusion == "included" {
-			coverage = append(coverage, episode.EpisodeID)
-		} else {
-			excluded = append(excluded, episode.EpisodeID)
-		}
-		if len(episode.Restrictions) > 0 {
-			limitations = append(limitations, fmt.Sprintf("%s: %s", episode.EpisodeID, strings.Join(episode.Restrictions, "、")))
-		}
+		coverage = append(coverage, episode.AssetTitle)
+		limitations = append(limitations, fmt.Sprintf("%s / %s：已确认可用视频素材", episode.FolderName, episode.AssetTitle))
 	}
 	if len(limitations) == 0 {
 		limitations = []string{"使用已确认授权的素材，并遵守剧透限制"}
 	}
-	return Proposal{Hook: request.CampaignObjective, EmotionalArc: "从跨剧集冲突建立悬念，并在交付时保留故事张力", EpisodeCoverage: coverage, ExcludedEpisodes: excluded, DeliveryDefinition: fmt.Sprintf("%s，%d 秒，%s，面向 %s", request.DeliveryPreferences.AspectRatio, request.DeliveryPreferences.TargetDurationSecond, request.DeliveryPreferences.Language, request.DeliveryPreferences.DestinationLabel), CostEstimate: "待接入剪辑执行器后估算", SourceLimitations: limitations}
+	return Proposal{Hook: "从已选剧集素材中建立叙事钩子", EmotionalArc: "从跨剧集冲突建立悬念，并在交付时保留故事张力", EpisodeCoverage: coverage, DeliveryDefinition: fmt.Sprintf("%s，%d-%d 秒，%s，投放 %s", request.DeliveryPreferences.AspectRatio, request.DeliveryPreferences.MinDurationSeconds, request.DeliveryPreferences.MaxDurationSeconds, languageLabel(request.DeliveryPreferences.Language), platformLabel(request.DeliveryPreferences.Platform)), CostEstimate: "待接入剪辑执行器后估算", SourceLimitations: limitations}
 }
 
 func decodeTask(stored model.DramaEditTask, decisions []model.DramaEditDecision) (Task, error) {
-	result := Task{ID: stored.ID, DramaTitle: stored.DramaTitle, CampaignObjective: stored.CampaignObjective, TargetAudience: stored.TargetAudience, Status: string(stored.Status), Stage: stored.Stage, NextAction: stored.NextAction, CreatedAt: stored.CreatedAt, UpdatedAt: stored.UpdatedAt}
+	result := Task{ID: stored.ID, DramaTitle: stored.DramaTitle, Status: string(stored.Status), Stage: stored.Stage, NextAction: stored.NextAction, ProductionTaskID: stored.ProductionTaskID, DeliveryResourceID: stored.DeliveryResourceID, ProductionError: stored.ProductionError, CreatedAt: stored.CreatedAt, UpdatedAt: stored.UpdatedAt}
 	if err := json.Unmarshal([]byte(stored.DeliveryJSON), &result.DeliveryPreferences); err != nil {
 		return Task{}, err
 	}
@@ -230,12 +267,188 @@ func decodeTask(stored model.DramaEditTask, decisions []model.DramaEditDecision)
 	return result, nil
 }
 
+func (s *Service) startProduction(userID, id string, historical bool) (Task, error) {
+	stored, err := s.store.get(userID, id)
+	if err != nil {
+		return Task{}, err
+	}
+	retry := false
+	if stored.ProductionTaskID != "" {
+		work, lookupErr := s.store.task(userID, stored.ProductionTaskID)
+		if lookupErr != nil {
+			return Task{}, lookupErr
+		}
+		if work != nil && (work.Status == model.TaskStatusQueued || work.Status == model.TaskStatusRunning || work.Status == model.TaskStatusSucceeded) {
+			return s.Get(userID, id)
+		}
+		stored.ProductionTaskID, stored.DeliveryResourceID, stored.ProductionError = "", "", ""
+		stored.Status = model.DramaEditStatusApproved
+		retry = true
+	}
+	if stored.Status != model.DramaEditStatusApproved && stored.Status != model.DramaEditStatusBlocked {
+		return Task{}, ErrInvalidTransition
+	}
+	if s.production == nil {
+		if historical {
+			return Task{}, &ValidationError{Message: "本地制作服务不可用，请启动工作台后重试"}
+		}
+		return s.Get(userID, id)
+	}
+	var delivery DeliveryPreferences
+	var episodes []Episode
+	if err := json.Unmarshal([]byte(stored.DeliveryJSON), &delivery); err != nil {
+		return Task{}, err
+	}
+	if err := json.Unmarshal([]byte(stored.EpisodesJSON), &episodes); err != nil {
+		return Task{}, err
+	}
+	assetIDs := make([]string, 0, len(episodes))
+	for _, episode := range episodes {
+		assetIDs = append(assetIDs, episode.AssetID)
+	}
+	resources, err := s.store.episodeResources(userID, assetIDs)
+	if err != nil {
+		return Task{}, err
+	}
+	timeline, options, err := productionTimeline(episodes, resources, delivery)
+	if err != nil {
+		return s.blockProduction(stored, err.Error())
+	}
+	operationID := "drama-edit:" + stored.ID
+	if retry {
+		// A terminal work must not reuse its idempotency key: the task runtime
+		// correctly returns the previous failed work for that key.
+		operationID = fmt.Sprintf("%s:retry:%d", operationID, now().UnixNano())
+	}
+	work, err := s.production.StartProduction(userID, timeline, options, operationID)
+	if err != nil {
+		return s.blockProduction(stored, "无法创建本地制作工作："+err.Error())
+	}
+	stored.ProductionTaskID = work.ID
+	stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusProcessing, "制作排队中", "本地制作工作已入队，等待开始", ""
+	stored.UpdatedAt = now()
+	if err := s.store.updateProduction(stored); err != nil {
+		return Task{}, err
+	}
+	return s.Get(userID, id)
+}
+
+func (s *Service) blockProduction(stored *model.DramaEditTask, reason string) (Task, error) {
+	stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusBlocked, "制作受阻", "检查素材或本地制作环境后重新开始制作", reason
+	stored.UpdatedAt = now()
+	if err := s.store.updateProduction(stored); err != nil {
+		return Task{}, err
+	}
+	return s.Get(stored.UserID, stored.ID)
+}
+
+func (s *Service) projectTask(stored model.DramaEditTask) (Task, error) {
+	if stored.ProductionTaskID != "" {
+		work, err := s.store.task(stored.UserID, stored.ProductionTaskID)
+		if err != nil {
+			return Task{}, err
+		}
+		if work == nil {
+			stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusBlocked, "制作受阻", "本地制作工作不存在，请重新开始制作", "关联的本地制作工作已丢失"
+		} else {
+			applyProductionProjection(&stored, work)
+		}
+		if err := s.store.updateProduction(&stored); err != nil {
+			return Task{}, err
+		}
+	}
+	result, err := decodeTask(stored, nil)
+	if err != nil {
+		return Task{}, err
+	}
+	if stored.DeliveryResourceID != "" {
+		result.DeliveryURL = assets.FileURL(stored.DeliveryResourceID)
+	}
+	if stored.ProductionTaskID != "" {
+		if work, err := s.store.task(stored.UserID, stored.ProductionTaskID); err == nil && work != nil {
+			result.ProductionStatus, result.ProductionProgress = string(work.Status), work.Progress
+		}
+	}
+	return result, nil
+}
+
+func applyProductionProjection(stored *model.DramaEditTask, work *model.Task) {
+	switch work.Status {
+	case model.TaskStatusQueued, model.TaskStatusRunning:
+		stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusProcessing, work.Stage, "本地制作进行中", ""
+	case model.TaskStatusSucceeded:
+		var output struct {
+			ResourceID string `json:"resourceId"`
+		}
+		if err := json.Unmarshal([]byte(work.ResultJSON), &output); err != nil || strings.TrimSpace(output.ResourceID) == "" {
+			stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusBlocked, "制作受阻", "检查制作结果后重新开始制作", "本地制作未返回有效成片"
+			return
+		}
+		stored.Status, stored.Stage, stored.NextAction, stored.DeliveryResourceID, stored.ProductionError = model.DramaEditStatusCompleted, "成片已生成", "查看或下载成片", output.ResourceID, ""
+	case model.TaskStatusFailed, model.TaskStatusCancelled:
+		stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusBlocked, "制作受阻", "检查失败原因后重新开始制作", strings.TrimSpace(work.Error)
+		if stored.ProductionError == "" {
+			stored.ProductionError = "本地制作未完成"
+		}
+	}
+}
+
+func productionTimeline(episodes []Episode, resources map[string]model.Resource, delivery DeliveryPreferences) (editing.Project, editing.Options, error) {
+	options := editing.DefaultOptions()
+	switch delivery.AspectRatio {
+	case "9:16":
+		options.Width, options.Height = 1080, 1920
+	case "1:1":
+		options.Width, options.Height = 1080, 1080
+	}
+	remaining := int64(delivery.MaxDurationSeconds) * 1000
+	minimum := int64(delivery.MinDurationSeconds) * 1000
+	timeline := editing.Project{Version: editing.ProjectVersion, Tracks: []editing.Track{{ID: "episodes", Kind: editing.KindVideo}}}
+	for index, episode := range episodes {
+		resource, ok := resources[episode.AssetID]
+		if !ok || !strings.HasPrefix(resource.MimeType, "video/") || resource.DurationMs <= 0 {
+			return editing.Project{}, editing.Options{}, fmt.Errorf("%s 没有可读取的视频资源", episode.AssetTitle)
+		}
+		if remaining <= 0 {
+			break
+		}
+		duration := min(resource.DurationMs, remaining)
+		timeline.Clips = append(timeline.Clips, editing.Clip{ID: fmt.Sprintf("episode-%d", index+1), Kind: editing.KindVideo, NodeID: episode.AssetID, TrackID: "episodes", StartMs: timeline.DurationMs, DurationMs: duration, Volume: 1, DirectMedia: &editing.DirectMedia{ID: resource.ID, Kind: editing.KindVideo, StorageKey: "resource:" + resource.ID}})
+		timeline.DurationMs += duration
+		remaining -= duration
+	}
+	if timeline.DurationMs < minimum {
+		return editing.Project{}, editing.Options{}, fmt.Errorf("可用素材总时长不足 %d 秒", delivery.MinDurationSeconds)
+	}
+	return timeline, options, nil
+}
+
+func languageLabel(value string) string {
+	if value == "en" {
+		return "英文"
+	}
+	return "中文"
+}
+
+func platformLabel(value string) string {
+	switch value {
+	case "tiktok":
+		return "TikTok"
+	case "facebook":
+		return "Facebook"
+	case "wechat_channels":
+		return "视频号"
+	default:
+		return "抖音"
+	}
+}
+
 func between(value string, min, max int) bool {
 	count := len([]rune(value))
 	return count >= min && count <= max
 }
 func validStatus(status string) bool {
-	return containsStatus([]model.DramaEditStatus{model.DramaEditStatusAwaitingApproval, model.DramaEditStatusRevisionRequested, model.DramaEditStatusApproved, model.DramaEditStatusBlocked, model.DramaEditStatusCancelled}, model.DramaEditStatus(status))
+	return containsStatus([]model.DramaEditStatus{model.DramaEditStatusAwaitingApproval, model.DramaEditStatusRevisionRequested, model.DramaEditStatusApproved, model.DramaEditStatusProcessing, model.DramaEditStatusCompleted, model.DramaEditStatusBlocked, model.DramaEditStatusCancelled}, model.DramaEditStatus(status))
 }
 func containsStatus(values []model.DramaEditStatus, target model.DramaEditStatus) bool {
 	for _, value := range values {

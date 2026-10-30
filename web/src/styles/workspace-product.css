@@ -412,6 +412,11 @@
 .assets-collection-filters .collection-folder-list .assets-folder-row { width: 100%; max-width: none; }
 .assets-folder-inline-input { min-width: 0; flex: 1 1 auto; }
 .assets-folder-row { position: relative; }
+.assets-folder-create-row { padding: 1px 0; }
+.assets-folder-confirm, .assets-folder-cancel { display: grid; width: 24px; height: 24px; flex: 0 0 auto; place-items: center; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--foreground-muted); cursor: pointer; }
+.assets-folder-confirm:hover { background: var(--control-selected-bg); color: var(--control-selected-fg); }
+.assets-folder-cancel:hover { background: color-mix(in srgb, var(--danger, #d33) 12%, transparent); color: var(--danger, #d33); }
+.assets-folder-confirm:disabled, .assets-folder-cancel:disabled { cursor: not-allowed; opacity: .45; }
 .assets-folder-delete-confirm {
     position: absolute;
     z-index: 30;

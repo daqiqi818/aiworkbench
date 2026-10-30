@@ -31,3 +31,15 @@ func TestFailDramaEditingProjectsPublicErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestRegisterDramaEditingRoutesIncludesEpisodeFolders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	RegisterDramaEditingRoutes(router.Group("/api"), nil)
+	for _, route := range router.Routes() {
+		if route.Method == http.MethodGet && route.Path == "/api/drama-editing/episode-folders" {
+			return
+		}
+	}
+	t.Fatal("episode folder route was not registered")
+}

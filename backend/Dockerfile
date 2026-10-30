@@ -2,6 +2,8 @@
 
 FROM alpine:3.22 AS protocol-package-build
 
+ARG ALPINE_MIRROR
+RUN if [ -n "$ALPINE_MIRROR" ]; then sed -i "s|https://dl-cdn.alpinelinux.org/alpine|$ALPINE_MIRROR|g" /etc/apk/repositories; fi
 RUN apk add --no-cache nodejs zip
 
 WORKDIR /src
@@ -11,11 +13,13 @@ RUN ./plugin-packages/build-packages.sh
 FROM golang:1.25-alpine AS backend-build
 
 ARG GOPROXY=https://proxy.golang.org,direct
+ARG ALPINE_MIRROR
 ARG BUILD_VERSION
 ARG BUILD_COMMIT=unknown
 ARG BUILD_TIME=unknown
 ENV GOPROXY=$GOPROXY
 
+RUN if [ -n "$ALPINE_MIRROR" ]; then sed -i "s|https://dl-cdn.alpinelinux.org/alpine|$ALPINE_MIRROR|g" /etc/apk/repositories; fi
 RUN apk add --no-cache build-base
 
 WORKDIR /src/backend
@@ -30,7 +34,9 @@ RUN --mount=type=cache,target=/root/.cache/go-build set -eu; \
 
 FROM alpine:3.22
 
-RUN apk add --no-cache ca-certificates tzdata wget \
+ARG ALPINE_MIRROR
+RUN if [ -n "$ALPINE_MIRROR" ]; then sed -i "s|https://dl-cdn.alpinelinux.org/alpine|$ALPINE_MIRROR|g" /etc/apk/repositories; fi
+RUN apk add --no-cache ca-certificates ffmpeg tzdata wget \
     && addgroup -S app \
     && adduser -S app -G app
 

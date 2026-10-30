@@ -1,28 +1,26 @@
 package dramaedit
 
-import "time"
+import (
+	"time"
 
-type Source struct {
-	Reference       string `json:"reference"`
-	RightsConfirmed bool   `json:"rightsConfirmed"`
-	Notes           string `json:"notes,omitempty"`
-}
+	"infinite-canvas/backend/internal/editing"
+	"infinite-canvas/backend/internal/model"
+)
 
 type Episode struct {
-	EpisodeID       string   `json:"episodeId"`
-	SequenceNumber  int      `json:"sequenceNumber"`
-	Summary         string   `json:"summary"`
-	Inclusion       string   `json:"inclusion"`
-	ExclusionReason string   `json:"exclusionReason,omitempty"`
-	Restrictions    []string `json:"restrictions,omitempty"`
-	Sources         []Source `json:"sources"`
+	FolderID       string `json:"folderId"`
+	FolderName     string `json:"folderName"`
+	AssetID        string `json:"assetId"`
+	AssetTitle     string `json:"assetTitle"`
+	SequenceNumber int    `json:"sequenceNumber"`
 }
 
 type DeliveryPreferences struct {
-	AspectRatio          string `json:"aspectRatio"`
-	TargetDurationSecond int    `json:"targetDurationSeconds"`
-	Language             string `json:"language"`
-	DestinationLabel     string `json:"destinationLabel"`
+	AspectRatio        string `json:"aspectRatio"`
+	MinDurationSeconds int    `json:"minDurationSeconds"`
+	MaxDurationSeconds int    `json:"maxDurationSeconds"`
+	Language           string `json:"language"`
+	Platform           string `json:"platform"`
 }
 
 type SpoilerPolicy struct {
@@ -42,11 +40,9 @@ type Proposal struct {
 
 type CreateRequest struct {
 	DramaTitle          string              `json:"dramaTitle"`
-	CampaignObjective   string              `json:"campaignObjective"`
-	TargetAudience      string              `json:"targetAudience"`
 	DeliveryPreferences DeliveryPreferences `json:"deliveryPreferences"`
 	SpoilerPolicy       SpoilerPolicy       `json:"spoilerPolicy"`
-	Episodes            []Episode           `json:"episodes"`
+	EpisodeAssetIDs     []string            `json:"episodeAssetIds"`
 }
 
 type Decision struct {
@@ -59,8 +55,6 @@ type Decision struct {
 type Task struct {
 	ID                  string              `json:"id"`
 	DramaTitle          string              `json:"dramaTitle"`
-	CampaignObjective   string              `json:"campaignObjective"`
-	TargetAudience      string              `json:"targetAudience"`
 	DeliveryPreferences DeliveryPreferences `json:"deliveryPreferences"`
 	SpoilerPolicy       SpoilerPolicy       `json:"spoilerPolicy"`
 	Episodes            []Episode           `json:"episodes"`
@@ -68,7 +62,36 @@ type Task struct {
 	Status              string              `json:"status"`
 	Stage               string              `json:"stage"`
 	NextAction          string              `json:"nextAction"`
+	ProductionTaskID    string              `json:"productionTaskId,omitempty"`
+	ProductionStatus    string              `json:"productionStatus,omitempty"`
+	ProductionProgress  int                 `json:"productionProgress,omitempty"`
+	DeliveryResourceID  string              `json:"deliveryResourceId,omitempty"`
+	DeliveryURL         string              `json:"deliveryUrl,omitempty"`
+	ProductionError     string              `json:"productionError,omitempty"`
 	Decisions           []Decision          `json:"decisions,omitempty"`
 	CreatedAt           time.Time           `json:"createdAt"`
 	UpdatedAt           time.Time           `json:"updatedAt"`
+}
+
+// ProductionStarter keeps the editing domain independent from the task runtime.
+type ProductionStarter interface {
+	StartProduction(string, editing.Project, editing.Options, string) (*model.Task, error)
+}
+
+type ProductionStarterFunc func(string, editing.Project, editing.Options, string) (*model.Task, error)
+
+func (f ProductionStarterFunc) StartProduction(userID string, timeline editing.Project, options editing.Options, operationID string) (*model.Task, error) {
+	return f(userID, timeline, options, operationID)
+}
+
+type EpisodeFolderCandidate struct {
+	FolderID   string                  `json:"folderId"`
+	FolderName string                  `json:"folderName"`
+	VideoCount int                     `json:"videoCount"`
+	Videos     []EpisodeAssetCandidate `json:"videos"`
+}
+
+type EpisodeAssetCandidate struct {
+	AssetID    string `json:"assetId"`
+	AssetTitle string `json:"assetTitle"`
 }
