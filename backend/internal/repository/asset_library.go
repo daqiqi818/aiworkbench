@@ -50,6 +50,33 @@ type EpisodeAssetVideoRow struct {
 	AssetTitle string
 }
 
+const openMontageDeliverySource = "OpenMontage"
+
+// episodeReadableVideoSQL deliberately mirrors dramaedit.store.episodeResources:
+// a task candidate must already resolve to an owned, ready video Resource, via
+// either the primary asset representation or its canonical resource: storage key.
+// A browser Blob or metadata-only asset is not readable by backend production.
+const episodeReadableVideoSQL = `(
+EXISTS (
+  SELECT 1 FROM asset_versions
+  JOIN asset_representations ON asset_representations.asset_version_id = asset_versions.id AND asset_representations.role = 'output'
+  JOIN resources AS represented_resources ON represented_resources.id = asset_representations.resource_id AND represented_resources.user_id = assets.user_id
+  WHERE asset_versions.id = assets.primary_version_id
+    AND represented_resources.status = 'ready'
+    AND represented_resources.kind = 'video'
+    AND represented_resources.mime_type LIKE 'video/%'
+)
+OR EXISTS (
+  SELECT 1 FROM resources AS payload_resources
+  WHERE payload_resources.id = substr(json_extract(assets.payload_json, '$.data.storageKey'), 10)
+    AND json_extract(assets.payload_json, '$.data.storageKey') LIKE 'resource:%'
+    AND payload_resources.user_id = assets.user_id
+    AND payload_resources.status = 'ready'
+    AND payload_resources.kind = 'video'
+    AND payload_resources.mime_type LIKE 'video/%'
+)
+)`
+
 // EpisodeAssetFolders returns only folders that still have at least one active video.
 // It is intentionally owner-scoped so callers cannot turn another user's folder into a task source.
 func (r *Repository) EpisodeAssetFolders(userID string) ([]EpisodeAssetFolderRow, error) {
@@ -57,7 +84,7 @@ func (r *Repository) EpisodeAssetFolders(userID string) ([]EpisodeAssetFolderRow
 	err := r.db.Model(&model.AssetFolder{}).
 		Select("asset_folders.id AS folder_id, asset_folders.name AS folder_name, COUNT(assets.id) AS video_count").
 		Joins("JOIN assets ON assets.folder_id = asset_folders.id AND assets.user_id = asset_folders.user_id").
-		Where("asset_folders.user_id = ? AND assets.kind = ? AND assets.status <> ?", userID, "video", model.AssetVersionStatusArchived).
+		Where("asset_folders.user_id = ? AND assets.kind = ? AND assets.status <> ? AND (json_valid(assets.payload_json) = 0 OR COALESCE(json_extract(assets.payload_json, '$.data.source'), '') <> ?) AND "+episodeReadableVideoSQL, userID, "video", model.AssetVersionStatusArchived, openMontageDeliverySource).
 		Group("asset_folders.id, asset_folders.name, asset_folders.position, asset_folders.created_at").
 		Order("asset_folders.position ASC, asset_folders.created_at ASC").
 		Scan(&rows).Error
@@ -77,7 +104,7 @@ func (r *Repository) EpisodeAssetFolders(userID string) ([]EpisodeAssetFolderRow
 	}
 	if err := r.db.Model(&model.Asset{}).
 		Select("folder_id, id AS asset_id, title AS asset_title").
-		Where("user_id = ? AND folder_id IN ? AND kind = ? AND status <> ?", userID, folderIDs, "video", model.AssetVersionStatusArchived).
+		Where("user_id = ? AND folder_id IN ? AND kind = ? AND status <> ? AND (json_valid(payload_json) = 0 OR COALESCE(json_extract(payload_json, '$.data.source'), '') <> ?) AND "+episodeReadableVideoSQL, userID, folderIDs, "video", model.AssetVersionStatusArchived, openMontageDeliverySource).
 		Order("folder_id ASC, created_at ASC, id ASC").
 		Scan(&videos).Error; err != nil {
 		return nil, err

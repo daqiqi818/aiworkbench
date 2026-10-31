@@ -12,3 +12,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+
+  openmontage-runner:
+    image: beeftv-openmontage-runner:server
+    build:
+      context: .
+      dockerfile: openmontage-runner/Dockerfile

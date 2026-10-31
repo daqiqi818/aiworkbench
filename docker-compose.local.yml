@@ -22,6 +22,9 @@ services:
       CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS: ${CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS:-}
       CANVAS_CORS_ORIGINS: ${CANVAS_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       ENABLE_PROVIDER_PLUGINS: ${ENABLE_PROVIDER_PLUGINS:-false}
+      OPENMONTAGE_RUNNER_URL: http://openmontage-runner:8090
+      OPENMONTAGE_RUNNER_TOKEN: ${OPENMONTAGE_RUNNER_TOKEN:-local-development-change-me}
+      OPENMONTAGE_SOURCE_BROKER_URL: http://backend:8080
       GIN_MODE: release
     volumes:
       - backend-data:/data
@@ -62,5 +65,23 @@ services:
         - action: rebuild
           path: ./CHANGELOG.md
 
+  openmontage-runner:
+    image: beeftv-openmontage-runner:local
+    build:
+      context: .
+      dockerfile: openmontage-runner/Dockerfile
+    environment:
+      OPENMONTAGE_WORKSPACE_ROOT: /workspaces
+      OPENMONTAGE_RUNNER_TOKEN: ${OPENMONTAGE_RUNNER_TOKEN:-local-development-change-me}
+    volumes:
+      - openmontage-workspaces:/workspaces
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   backend-data:
+  openmontage-workspaces:

@@ -21,10 +21,15 @@ export function isWorkspaceMediaAssetKind(kind: string) {
     return WORKSPACE_MEDIA_KINDS.has(kind);
 }
 
-/** Desktop/hosted media confirm only resource-backed rows; browser-local IndexedDB is the product store. */
+/**
+ * Video used by the short-drama workbench is always a BeefTV-owned source.
+ * Browser-local storage can retain a recoverable copy, but cannot be the only
+ * durable location because the backend and OpenMontage cannot read a Blob URL.
+ */
 export function isCanonicalWorkspaceMediaPersistSource(input: { kind?: string; storageKey?: string; pendingRemoteUpload?: boolean }) {
     if (input.kind && !isWorkspaceMediaAssetKind(input.kind)) return true;
     if (input.pendingRemoteUpload) return false;
+    if (input.kind === "video") return Boolean(resourceIdFromStorageKey(input.storageKey));
     if (usesBrowserLocalResourceStore()) return Boolean(input.storageKey?.trim());
     return Boolean(resourceIdFromStorageKey(input.storageKey));
 }

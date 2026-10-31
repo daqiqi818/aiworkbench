@@ -14,6 +14,15 @@ the workbench view and invokes the typed API. The first increment records an app
 for a future rendering executor rather than claiming that an external OpenMontage process rendered
 a video.
 
+### OpenMontage production amendment
+
+For newly approved drama-edit tasks, the execution boundary is mandatory: BeefTV owns task,
+resource and UI state; the internal Runner owns the native OpenMontage workspace. Approval must
+start a `cinematic` production rather than `timeline_render`; stage gates are projected to the
+workbench; only a verified final video and native render report imported as owner-scoped BeefTV
+resources can produce the terminal completed state. The former local FFmpeg task remains an
+explicit legacy fast path only and is never selected by this workflow.
+
 ## Technical Context
 
 **Language/Version**: Go 1.25 backend; TypeScript with React 19 frontend
@@ -94,6 +103,129 @@ OpenMontage checkout path or copied Python runtime.
 ## Complexity Tracking
 
 No constitution violations or additional project roots are required.
+
+## Amendment: Active OpenMontage Task Deletion
+
+The existing owner-scoped delete command remains the single endpoint. Before deleting a task in
+`approved` or `processing`, the drama-edit domain calls its narrow `NativeRuntime.Cancel` port with
+the persisted OpenMontage production identity and current owner. It deletes the task only if the
+returned native state is `cancelled`; otherwise it returns a per-task retention reason and processes
+the rest of the command. The browser receives only the normal delete result, never Runner credentials.
+
+This uses the existing Runner cancellation contract and does not add a second cancellation endpoint,
+state table, or media cleanup path. Source-file deletion remains opt-in and runs only after a task
+has been deleted successfully.
+
+| Principle | Plan response | Status |
+| --- | --- | --- |
+| Explicit boundaries and contracts | The service owns lifecycle validation and calls the existing native runtime port; handler and page retain their command roles. | PASS |
+| Secure, owned, truthful data | The production identity is owner-scoped server-side; stop failure retains the task rather than claiming deletion. | PASS |
+| Proportionate verification | Add domain tests for acknowledged cancellation and failed cancellation, then validate a real Runner-backed active deletion. | PASS |
+
+## Amendment: Short-Drama Task Operations and Creator Report
+
+The creator-facing workbench is named **短剧剪辑**. Extend the existing task aggregate rather
+than creating a second task store: list reads are ordered by `created_at DESC, id DESC`; deletion
+is owner-scoped, never deletes assets, and refuses active production until it is cancelled. The
+existing OpenMontage projection remains the authority for list progress and current stage.
+
+The runner writes a creator-readable `editorial_report` alongside its technical report, derived
+only from selected-source cuts and persisted native checkpoints. It records source/final ranges,
+selection rationale, subtitle availability, and checkpoint workflow entries. Missing transcript or
+editorial data is explicitly unavailable. The web page reads this owned report in a modal, plays
+the owned delivery in an in-page modal, and downloads only the same delivery resource.
+
+## Amendment: Verified Task and Source Deletion
+
+Use a JSON delete command containing the selected task IDs and the explicit `deleteEpisodeFiles`
+decision. The short-drama domain owns selection validation, task lifecycle deletion, and the
+remaining-short-drama-task reference check. It delegates physical asset deletion to the existing
+BeefTV asset domain, which is already the authority for ownership, project, canvas, resource and
+physical-object safety. The confirmation UI starts with the source-file option unchecked and
+reports task and source-file results separately.
+
+Validation includes focused service/handler tests plus a real browser workflow against the
+rebuilt local stack. The browser flow creates two disposable completed tasks, deletes both with
+the default option and verifies their source assets remain, then verifies the opted-in source-file
+deletion result against the asset library. No build-only sign-off is valid for this amendment.
+
+## Amendment: Published OpenMontage Runtime
+
+### Summary
+
+Vendor the complete tracked OpenMontage source under `third_party/openmontage` at a recorded
+upstream commit, excluding local credentials, generated projects, dependency trees, caches, and
+VCS metadata. A first-party `openmontage-runner` service owns one isolated canonical OpenMontage
+workspace per production and reports its native checkpoint state. BeefTV remains the user-facing
+authorization, asset, approval, quota, task, and delivery surface; the OpenMontage workspace and
+checkpoint artifacts remain the production source of truth.
+
+The published multi-episode path is pinned to the upstream `cinematic` manifest. Its canonical
+stages are `research`, `proposal`, `script`, `scene_plan`, `assets`, `edit`, `compose`, and
+`publish`. The existing fast FFmpeg path remains a separately labelled local preview path and
+must never be presented as an OpenMontage production.
+
+### Technical Context Changes
+
+**Runtime**: A separately deployable internal runner image bundles Python, Node/Remotion, FFmpeg,
+the vendored OpenMontage tree, and a small runner boundary. It is never publicly exposed. The
+runner is controlled by the existing official pi SDK `agent-host`; no parallel model conversation
+loop is introduced.
+
+**Storage**: Each production mounts or accesses a user-and-run scoped persistent workspace. The
+canonical project directory contains `project.json`, artifacts, checkpoints, render output, and
+decision history. The published deployment must use shared durable storage for these directories;
+the local compose profile may use a named development volume.
+
+**Security**: Backend-to-runner requests use an internal authenticated channel. User identity,
+production ID, immutable source snapshot, pipeline version, budget, and allowed capability set are
+required on every operation. Provider credentials stay in runner/runtime configuration and are
+never copied to task payloads or checkpoints.
+
+**Licensing**: The combined public distribution is AGPLv3-compliant by explicit publisher choice.
+The root legal notices, bundled-source manifest, public source offer, and interactive network
+notice must state this before an image is published.
+
+### Constitution Check Amendment
+
+| Principle | Plan response | Status |
+| --- | --- | --- |
+| Evidence and focused change | Uses the upstream cinematic manifest and checkpoint contract unchanged; vendor origin and exclusions are machine-recorded. | PASS |
+| Explicit boundaries and contracts | Keeps web/API authorization separate from the internal production runtime, with a narrow authenticated runner contract. | PASS |
+| Secure, owned, truthful data | Scope every runtime workspace and event to a production and user; no cross-user paths, credentials, or fabricated completed states. | PASS |
+| Proportionate verification | Add vendor-integrity, runner checkpoint, authorization, and compose smoke coverage before any paid provider execution. | PASS |
+| Upstream-preserving product evolution | Vendor tree is isolated and pinned, with downstream changes kept outside it; upgrades are explicit source-version migrations. | PASS |
+
+### Project Structure Changes
+
+```text
+third_party/
+└── openmontage/                    # tracked upstream source only, recorded commit and AGPL notice
+
+openmontage-runner/
+├── Dockerfile                       # internal CPU runner image
+├── requirements.txt                 # runner dependencies pinned separately from vendored source
+├── app/                             # authenticated native-workspace and checkpoint boundary
+└── tests/                           # runner contract and isolation tests
+
+backend/
+├── internal/openmontage/            # typed internal runner client and production projection
+└── internal/dramaedit/              # production selection and native checkpoint projection
+
+deploy/
+└── openmontage/                     # production runner configuration and AGPL source-offer material
+```
+
+### Delivery Phases
+
+1. Establish legal notices, source manifest, reproducible vendor import, and a runner that can
+   create and inspect an isolated native `cinematic` workspace without executing providers.
+2. Add authenticated backend dispatch, durable production/run mapping, checkpoint event projection,
+   approval gates, cancellation, and asset handoff.
+3. Drive stages through the existing `agent-host`, then import verified final render and
+   `render_report` into the BeefTV resource library.
+4. Add deployment scaling, object storage, quotas, provider policy, CPU/GPU images, and acceptance
+   tests with non-billed fixtures before enabling public paid production.
 
 ## Amendment: Asset-Folder Episode Workflow
 
@@ -180,6 +312,65 @@ web/src/
 ├── services/workspace-asset-folders.ts       # browser-local folder migration and canonical IDs
 ├── services/workspace-asset-repository.ts    # metadata-only local asset bridge
 └── pages/drama-editing/index.tsx             # synchronize before loading episode candidates
+
+## Amendment: Creator-Facing Task Labels
+
+### Technical Context Changes
+
+**Navigation**: The existing workbench route remains `/drama-editing`; its sole creator-facing sidebar label becomes “短剧剪辑”.
+
+**Presentation**: Task cards omit the progress control. A card-local label mapper converts native pipeline stages into concise Chinese descriptions, while the raw stage field remains available for polling and the detail approval action. This amendment changes no persisted task state, endpoint, or runtime contract.
+
+### Constitution Check Amendment
+
+| Principle | Plan response | Status |
+| --- | --- | --- |
+| Explicit boundaries and contracts | Native metadata remains in the existing typed contract; only its card presentation is normalized. | PASS |
+| Focused change | The amendment is limited to the navigation label and task-list presentation. | PASS |
+| Proportionate verification | Build the web bundle and verify a rendered task card with browser accessibility state and text checks. | PASS |
+
+## Amendment: Compact Task Status
+
+### Technical Context Changes
+
+**Task card**: Remove the left-side stage-description line and its presentation mapper. The existing `productionProgress` remains the source of truth; only the right-side processing tag appends its current percentage. No persistence, API, or polling changes are required.
+
+### Constitution Check Amendment
+
+| Principle | Plan response | Status |
+| --- | --- | --- |
+| Explicit boundaries and contracts | The display reuses the existing typed task progress field without changing its producer or contract. | PASS |
+| Focused change | Only the short-drama task-card presentation is changed. | PASS |
+| Proportionate verification | Build and verify a live processing task card's left summary and right state tag. | PASS |
+
+## Amendment: Compact Task Creation
+
+### Technical Context Changes
+
+**Creation defaults**: The existing spoiler-policy object stays in the task contract but is fixed to `no-major-spoilers` at the page's form boundary. Saved preferences cannot replace it.
+
+**Episode chooser**: The existing checkbox selection and IDs are unchanged. The chooser gets five stable desktop tracks and a truncating label with a hover title. Responsive narrow layouts may collapse columns to preserve readable touch targets.
+
+### Constitution Check Amendment
+
+| Principle | Plan response | Status |
+| --- | --- | --- |
+| Explicit boundaries and contracts | The fixed default preserves the existing request shape and backend validation. | PASS |
+| Focused change | Only creation-form defaults and episode chooser presentation change. | PASS |
+| Proportionate verification | Build and inspect the real creation dialog with a seven-episode folder and a long-name fixture. | PASS |
+
+## Amendment: Compact Creation Controls
+
+### Technical Context Changes
+
+**Layout**: The form's desktop grid has five stable tracks. Title spans two; aspect, language and platform occupy the remaining tracks. Duration controls begin a compact second row. Narrow viewports retain the existing readable one-column field fallback.
+
+### Constitution Check Amendment
+
+| Principle | Plan response | Status |
+| --- | --- | --- |
+| Focused change | This modifies only the task-creation form layout and its local styles. | PASS |
+| User-facing quality | Stable track sizing prevents long labels and enum controls from overlapping or resizing the dialog. | PASS |
 ```
 
 ## Amendment: Task Submission Feedback
@@ -258,3 +449,49 @@ The final local backend image installs Alpine's `ffmpeg` package, which provides
 and `ffprobe` on the container `PATH`. No host volume or undocumented `CANVAS_FFMPEG_PATH` is
 required. Deployment verification checks those binaries in the running container, then retries an
 already source-ready task and polls its durable editing-task state to a terminal result.
+
+## Amendment: Source Candidate and Asset Workspace Clarity
+
+### Technical Context Changes
+
+**Candidate identity**: The owner-scoped folder query excludes only durable OpenMontage delivery metadata
+(`data.source = "OpenMontage"`). It does not infer generated status from a title, so user renames cannot
+accidentally make an output eligible or hide a source video. The count and returned video rows share this predicate.
+
+**Asset presentation**: The existing asset page keeps its folder and upload implementations, but its default
+filter state is expanded. Its quick-filter block and source-navigation rail are removed from the personal-library
+surface. Direct actions call the existing folder editor and file input.
+
+### Constitution Check Amendment
+
+| Principle | Plan response | Status |
+| --- | --- | --- |
+| Secure, owned, truthful data | Candidate filtering is based on persisted provenance, while source ownership and archive checks remain in the query. | PASS |
+| Focused change | Reuses current upload/folder flows and removes only obsolete presentation controls. | PASS |
+| Proportionate verification | Add repository regression coverage, run focused Go tests, web build, and browser checks for the visible controls and 7-video candidate set. | PASS |
+
+## Amendment: Backend-Readable Episode Sources
+
+### Technical Context Changes
+
+**Upload boundary**: Browser local mode may cache a video for recovery, but a video uploaded through
+the asset workspace is successful only after the existing owner-scoped Resource API has returned a
+ready BeefTV resource and the asset payload points to `resource:<id>`. It must not use a browser
+Blob URL as the canonical source reference.
+
+**Historical repair**: Before the task creation page queries episode folders, browser-local legacy
+videos with readable IndexedDB bytes are uploaded through the same idempotent resource API and their
+asset metadata is rewritten. A missing or failed local Blob remains visible as an asset but is not a
+candidate.
+
+**Admission symmetry**: The repository applies one source-readiness predicate to both the folder
+count and individual candidate rows. The domain therefore rejects stale client metadata at task
+creation rather than accepting a task that can only fail on approval.
+
+### Constitution Check Amendment
+
+| Principle | Plan response | Status |
+| --- | --- | --- |
+| Secure, owned, truthful data | Backend ownership is established before a video is eligible; Runner continues to receive only BeefTV resource IDs. | PASS |
+| Explicit boundaries and contracts | Resource upload stays at the shared media boundary; repository owns candidate eligibility; drama-edit service remains the final authority. | PASS |
+| Proportionate verification | Add focused upload/persistence and repository tests, then exercise a real two-video browser upload through approval and Runner admission. | PASS |

@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const CurrentSchemaVersion int64 = 16
+const CurrentSchemaVersion int64 = 17
 
 type localSchemaMigration struct {
 	Version   int64 `gorm:"primaryKey;autoIncrement:false"`
@@ -91,6 +91,7 @@ func canonicalLocalMigrations() []localMigration {
 		{version: 14, name: "drama-editing-workbench", apply: migrateDramaEditingWorkbench},
 		{version: 15, name: "drama-editing-episode-folders", apply: migrateDramaEditingEpisodeFolders},
 		{version: 16, name: "drama-editing-production-execution", apply: migrateDramaEditingProductionExecution},
+		{version: 17, name: "drama-editing-openmontage-production", apply: migrateDramaEditingOpenMontageProduction},
 	}
 }
 
@@ -209,6 +210,13 @@ func migrateDramaEditingEpisodeFolders(tx *gorm.DB) error {
 func migrateDramaEditingProductionExecution(tx *gorm.DB) error {
 	if err := tx.AutoMigrate(&model.DramaEditTask{}); err != nil {
 		return fmt.Errorf("迁移多剧集剪辑制作执行: %w", err)
+	}
+	return nil
+}
+
+func migrateDramaEditingOpenMontageProduction(tx *gorm.DB) error {
+	if err := tx.AutoMigrate(&model.DramaEditTask{}); err != nil {
+		return fmt.Errorf("迁移 OpenMontage 制作状态: %w", err)
 	}
 	return nil
 }

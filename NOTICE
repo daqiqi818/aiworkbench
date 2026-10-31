@@ -1,8 +1,18 @@
 BeefTV
 Copyright (C) 2026 BeefTV contributors
 
-BeefTV is distributed under the MIT License. The complete license text is
-provided in LICENSE.
+BeefTV is distributed under the GNU Affero General Public License, version 3
+or any later version. The complete license text is provided in LICENSE.
+
+Network source offer
+--------------------
+
+Users interacting with a deployed BeefTV service that includes OpenMontage
+production functionality can obtain the corresponding source code, including
+the vendored OpenMontage source and BeefTV modifications, from the source
+repository identified by the deployment's release metadata. Deployers must
+preserve this notice and provide an equivalent source offer in their service
+interface and release materials.
 
 Project scope
 -------------

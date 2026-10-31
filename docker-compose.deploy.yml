@@ -45,6 +45,9 @@ services:
       CANVAS_UPDATER_SOCKET: /run/beeftv-updater/updater.sock
       CANVAS_UPDATER_TOKEN: ${CANVAS_UPDATER_TOKEN:-}
       GIN_MODE: release
+      OPENMONTAGE_RUNNER_URL: http://openmontage-runner:8090
+      OPENMONTAGE_RUNNER_TOKEN: ${OPENMONTAGE_RUNNER_TOKEN:?请配置 OpenMontage Runner 内部令牌}
+      OPENMONTAGE_SOURCE_BROKER_URL: http://backend:8080
     volumes:
       - ${CANVAS_DATA_PATH:-backend-data}:/data
       - ${CANVAS_UPDATER_SOCKET_DIR:-/run/beeftv-updater}:/run/beeftv-updater
@@ -65,7 +68,17 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  openmontage-runner:
+    image: ghcr.io/glanderness/beeftv-openmontage-runner:${CANVAS_IMAGE_TAG:-latest}
+    environment:
+      OPENMONTAGE_WORKSPACE_ROOT: /workspaces
+      OPENMONTAGE_RUNNER_TOKEN: ${OPENMONTAGE_RUNNER_TOKEN:?请配置 OpenMontage Runner 内部令牌}
+    volumes:
+      - ${OPENMONTAGE_WORKSPACE_PATH:-openmontage-workspaces}:/workspaces
+    restart: unless-stopped
+
 volumes:
   backend-data:
   postgres-data:
   redis-data:
+  openmontage-workspaces:

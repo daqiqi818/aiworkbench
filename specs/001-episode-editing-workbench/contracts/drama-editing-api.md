@@ -101,3 +101,61 @@ proposal with status `revision_requested`.
 ## `POST /drama-editing/tasks/:id/cancel`
 
 Optionally accepts a note. Records cancellation and returns the task with status `cancelled`.
+## OpenMontage Production Contract
+
+## Short-Drama Operations Amendment
+
+| Operation | Intent | Required outcome |
+| --- | --- | --- |
+| `DELETE /drama-editing/tasks` | Delete one or more owner tasks | Receives `{ "ids": ["DE_..."], "deleteEpisodeFiles": false }`; before deleting an active native production, stops it through the internal Runner and proceeds only after `cancelled` is acknowledged. |
+| `GET /drama-editing/tasks` | Read task summaries | Returns tasks ordered by creation time descending, with projected status, progress and current/last native stage. |
+| Delivery report resource | Read creator report | The owned report contains `editorial_report`; absent subtitles or editorial data are represented as unavailable rather than generated. |
+
+`deleteEpisodeFiles` defaults to `false`. When true, only the selected tasks' source episode
+assets are candidates; delivery video, report and folders are excluded. The service rechecks
+remaining short-drama-task references, then delegates asset deletion to the existing owner-scoped
+asset deletion policy. A protected source asset is returned as retained with its reason without
+rolling back independent task deletion.
+
+The published workbench adds production endpoints beneath the existing drama-editing task owner.
+All responses retain the normal business envelope and all identifiers are owner-scoped.
+
+| Operation | Intent | Required outcome |
+| --- | --- | --- |
+| `POST /drama-editing/tasks/:id/approve` | Create and start the active native `cinematic` production | Returns the task projection with runtime stage, status and opaque production ID; refuses unavailable runtime or invalid source ownership. |
+| `GET /drama-editing/tasks/:id` | Read projected native production state | Returns stage, checkpoint status, required approval, blockers and delivery links. |
+| `POST /drama-editing/tasks/:id/openmontage/stages/:stage/approve` | Record a user approval at a required native gate | Appends an approval and permits only the next manifest-valid stage. |
+| `POST /drama-editing/tasks/:id/cancel` | Stop the owner’s active production | Cancels only that scoped run and preserves native checkpoint history. |
+| `GET /openmontage/capabilities` | Read the current published capability envelope | Returns supported pipeline versions and unavailable reasons without credentials. |
+
+The internal runner contract is not public. It receives an authenticated immutable production
+identity, owner identity, runtime version, opaque workspace key, input resource references, budget
+and allowed capability set. It returns only checkpoint-derived state, safe artifact metadata,
+stage-gate requirements, and opaque delivery artifact references.
+
+`GET /internal/openmontage/productions/:productionID/sources/:resourceID` is Runner-only. It
+requires the persisted per-production `X-BeefTV-Production-Token`, verifies that the requested
+resource belongs to the task owner and selected episodes, and streams it without registering a
+copy in the Runner.
+
+## Episode Candidate Provenance Amendment
+
+`GET /drama-editing/episode-folders` excludes a video only when its persisted asset payload identifies it as an
+OpenMontage delivery (`data.source = "OpenMontage"`). Both `videoCount` and `videos` apply this exact condition.
+The endpoint continues to return owned, non-archived source videos and task creation rechecks ownership and
+availability for all submitted IDs.
+
+## Task Card Presentation Amendment
+
+No HTTP contract changes. `stage` and `openMontageStage` remain available for task detail, polling, and stage
+approval; list cards must translate native stage codes to creator-facing wording and must not render a progress bar.
+
+## Compact Task Status Amendment
+
+No HTTP contract changes. A processing task card renders the existing `productionProgress` in its right-side status label and does not render `stage` or `openMontageStage` in its left-side summary.
+
+## Compact Task Creation Amendment
+
+No HTTP contract changes. `POST /drama-editing/tasks` continues receiving `spoilerPolicy`; the creation form always
+sends the existing `no-major-spoilers` value. Episode display truncation affects neither the submitted asset IDs nor
+their order.

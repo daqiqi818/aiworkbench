@@ -43,6 +43,13 @@ camera_language_guide.md
 /project-memory/
 .workbuddy/
 .worktrees/
+third_party/openmontage/.env
+third_party/openmontage/.venv/
+third_party/openmontage/node_modules/
+third_party/openmontage/remotion-composer/node_modules/
+third_party/openmontage/projects/
+third_party/openmontage/**/__pycache__/
+openmontage-runner/.pytest_cache/
 
 # Local backend and desktop artifacts; never commit build output.
 build/depth-runtime/*.zip

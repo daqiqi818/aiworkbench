@@ -1,5 +1,37 @@
 # Data Model: Multi-Episode Editing Workbench
 
+## Short-Drama Operations Amendment
+
+- **Task deletion result**: `id`, `deleted`, and optional `reason`. A task in `approved` or
+  `processing` is retained until its production is cancelled. Deleting a task does not delete its
+  BeefTV assets or delivery resources.
+- **Creator report**: an owned delivery-report projection with per-source episode subtitle status,
+  hook, ordered story clips, suspense status, and native workflow entries. Every source/final time
+  range and rationale originates from the run; unavailable source subtitles or editorial markers
+  remain explicitly unavailable.
+- **Creation preference**: device-local, creator-scoped form state containing folder, selected
+  videos, delivery settings and spoiler policy. It excludes `dramaTitle` and is validated against
+  current folder candidates before use.
+
+## Verified Deletion Amendment
+
+- **Delete command**: `ids` is a non-empty set of at most 100 owned task IDs; `deleteEpisodeFiles`
+  is false unless the creator explicitly selects it.
+- **Task result**: retains `id`, `deleted`, and optional `reason`; adds individual source-file
+  outcomes when source deletion was requested. A source asset is eligible only after all selected
+  task records are removed and no remaining short-drama task references it.
+- **Source file result**: identifies the episode asset and whether it was deleted or retained with
+  a reference-safety reason. Delivery video and report assets are never candidates.
+
+## Active Production Deletion Amendment
+
+- **Active deletion precondition**: an `approved` or `processing` task must have an owned
+  `openMontageProductionId` and an available native stop capability. The task record remains until
+  that production returns terminal `cancelled`.
+- **Active deletion result**: the existing task result returns `deleted: true` only after native
+  cancellation is acknowledged. A failed or unavailable stop returns `deleted: false` with a reason;
+  it does not mutate the task lifecycle or delete associated BeefTV assets.
+
 ## Drama Edit Task
 
 | Field | Rules |
@@ -95,3 +127,69 @@ production request, the client may replace it with `resource:<resourceId>` after
 has been uploaded. The `resourceId` is not copied into `DramaEditTask`; the task retains its
 asset ID and production admission resolves the current owned ready video resource through either
 the asset's output representation or this resource storage key.
+## Amendment: OpenMontage Published Production
+
+### `OpenMontageRuntimeVersion`
+
+| Field | Meaning | Rules |
+| --- | --- | --- |
+| `id` | Immutable runtime version identity | Unique; never rewritten after publication. |
+| `upstreamCommit` | Vendored OpenMontage source commit | Required, immutable, auditable. |
+| `pipelineName` | Native supported pipeline | Initial value is `cinematic`. |
+| `capabilityManifest` | Declared tools, resource classes and availability | Must be available before a run is admitted. |
+| `licenseNoticeVersion` | Published AGPL/source-offer notice version | Required for public runtime admission. |
+
+### `OpenMontageProductionRun`
+
+| Field | Meaning | Rules |
+| --- | --- | --- |
+| `id` | Durable production identity | Globally unique. |
+| `userId` | Owning user | Required for all reads and mutations. |
+| `dramaEditTaskId` | Owning editing task | One active production per task and versioned retry history. |
+| `runtimeVersionId` | Fixed runtime source version | Required and immutable after creation. |
+| `workspaceKey` | Opaque scoped native workspace location | Never expose filesystem paths to users. |
+| `pipelineName` | Native pipeline | Initially `cinematic`; immutable after creation. |
+| `status` | Projection of native checkpoint state | `queued`, `in_progress`, `awaiting_approval`, `blocked`, `completed`, `cancelled`. |
+| `currentStage` | Native cinematic stage | Must be declared by the fixed manifest. |
+| `inputSnapshot` | Immutable source/brief/budget/capability references | Contains resource IDs only, never credentials or raw local paths. |
+| `lastCheckpointAt` | Latest accepted checkpoint timestamp | Monotonic per production. |
+| `deliveryResourceId` | Imported final video resource | Required only for `completed`. |
+| `renderReportResourceId` | Imported native render report resource | Required only for `completed`. |
+
+### `OpenMontageStageApproval`
+
+One append-only decision for a production stage and artifact revision. It records the owning user,
+stage, decision (`approved`, `revision_requested`, `rejected`, `cancelled`), optional note, and
+timestamp. A required stage cannot advance without the corresponding approved decision.
+
+### Relationships and Invariants
+
+- A `DramaEditTask` may have many historical production runs but at most one non-terminal run.
+- A production run belongs to exactly one user, one drama-editing task, and one runtime version.
+- Native OpenMontage checkpoint and artifact files are authoritative; BeefTV projections are
+  cacheable views that must be refreshed from the scoped workspace.
+- `completed` requires both a final video resource and a render-report resource. Any missing
+  native workspace, checkpoint, output, or ownership relationship projects as `blocked`.
+
+## Amendment: Eligible Episode Asset
+
+`EpisodeFolderCandidate.videos` is a transient owner-scoped source selection list. An eligible video is owned by
+the current user, assigned to the folder, non-archived, and does not contain `data.source: "OpenMontage"` in its
+persisted asset payload. `videoCount` is the length of this same set. OpenMontage delivery assets remain ordinary
+library assets and retain their folder relationship; they are simply not selectable as future episode input.
+
+## Amendment: Task Card Presentation
+
+`DramaEditTask.openMontageStage` remains native operational metadata and is not changed or persisted differently.
+The task-card projection derives an ephemeral creator-facing label from it; no progress value is part of the
+task-card presentation contract.
+
+## Amendment: Compact Task Status Presentation
+
+`DramaEditTask.productionProgress` remains the authoritative numeric value for an in-progress task. A task card presents it only within the right-side processing status label; stage-description text is not part of the card projection.
+
+## Amendment: Creation Defaults and Episode Label
+
+`CreateDramaEditTask.spoilerPolicy` remains required by the existing creation contract and is fixed to
+`{ policy: "no-major-spoilers", restrictedItems: [] }` by the creation form. Episode asset identity and selection
+remain unchanged; `assetTitle` has a compact visual projection with full text available through its hover label.

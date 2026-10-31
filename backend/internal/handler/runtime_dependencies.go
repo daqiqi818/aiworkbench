@@ -165,6 +165,9 @@ func (a serviceRuntimeAdapter) Approve(userID, id string) (dramaedit.Task, error
 func (a serviceRuntimeAdapter) StartProduction(userID, id string) (dramaedit.Task, error) {
 	return a.dramaEditing.StartProduction(userID, id)
 }
+func (a serviceRuntimeAdapter) Delete(userID string, request dramaedit.DeleteRequest) ([]dramaedit.DeleteResult, error) {
+	return a.dramaEditing.Delete(userID, request)
+}
 
 func (a serviceRuntimeAdapter) RequestRevision(userID, id, note string) (dramaedit.Task, error) {
 	return a.dramaEditing.RequestRevision(userID, id, note)
@@ -172,6 +175,18 @@ func (a serviceRuntimeAdapter) RequestRevision(userID, id, note string) (dramaed
 
 func (a serviceRuntimeAdapter) Cancel(userID, id, note string) (dramaedit.Task, error) {
 	return a.dramaEditing.Cancel(userID, id, note)
+}
+
+func (a serviceRuntimeAdapter) ApproveNativeStage(userID, id, stage, note string) (dramaedit.Task, error) {
+	return a.dramaEditing.ApproveNativeStage(userID, id, stage, note)
+}
+
+func (a serviceRuntimeAdapter) ValidateOpenMontageSource(userID, productionID, resourceID, token string) error {
+	return a.dramaEditing.ValidateOpenMontageSource(userID, productionID, resourceID, token)
+}
+
+func (a serviceRuntimeAdapter) ValidateOpenMontageSourceByProduction(productionID, resourceID, token string) (string, error) {
+	return a.dramaEditing.ValidateOpenMontageSourceByProduction(productionID, resourceID, token)
 }
 
 func requestAssetPort(c *gin.Context, fallback *app.Service) localapp.AssetPort {

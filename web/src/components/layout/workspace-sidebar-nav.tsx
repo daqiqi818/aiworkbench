@@ -48,7 +48,7 @@ function buildNav(features: FeatureAvailability): { groups: WorkspaceNavGroup[];
             items: [
                 { id: "home", title: "首页", icon: Home, to: "/" },
                 { ...toolItem("canvas", "/project"), title: "项目" },
-				{ id: "drama-editing", title: "多剧集剪辑", icon: Clapperboard, to: "/drama-editing" },
+				{ id: "drama-editing", title: "短剧剪辑", icon: Clapperboard, to: "/drama-editing" },
                 { ...toolItem("assets", "/assets"), title: "资产" },
                 { id: "settings:channels", title: "模型配置", icon: Settings2, to: "/settings?section=channels" },
                 { id: "agents", title: "外部 Agent", icon: Plug, to: "/agents" },

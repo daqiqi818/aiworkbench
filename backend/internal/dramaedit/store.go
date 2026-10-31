@@ -29,7 +29,28 @@ func (s *store) list(userID string, status string) ([]model.DramaEditTask, error
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
-	return tasks, query.Order("updated_at DESC, id DESC").Find(&tasks).Error
+	return tasks, query.Order("created_at DESC, id DESC").Find(&tasks).Error
+}
+
+func (s *store) delete(userID, id string) error {
+	return s.repo.Transaction(func(tx *repository.Repository) error {
+		result := tx.DB().Where("id = ? AND user_id = ?", id, userID).Delete(&model.DramaEditTask{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrNotFound
+		}
+		return tx.DB().Where("task_id = ? AND user_id = ?", id, userID).Delete(&model.DramaEditDecision{}).Error
+	})
+}
+
+func (s *store) episodeReferencedByTask(userID, assetID string) (bool, error) {
+	var count int64
+	err := s.repo.DB().Model(&model.DramaEditTask{}).
+		Where("user_id = ? AND episodes_json LIKE ?", userID, "%\"assetId\":\""+assetID+"\"%").
+		Count(&count).Error
+	return count > 0, err
 }
 
 func (s *store) get(userID, id string) (*model.DramaEditTask, error) {
@@ -42,6 +63,24 @@ func (s *store) get(userID, id string) (*model.DramaEditTask, error) {
 		return nil, err
 	}
 	return &task, nil
+}
+
+func (s *store) byOpenMontageProduction(userID, productionID string) (*model.DramaEditTask, error) {
+	var task model.DramaEditTask
+	err := s.repo.DB().Where("user_id = ? AND open_montage_production_id = ?", userID, productionID).First(&task).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &task, err
+}
+
+func (s *store) byOpenMontageProductionAnyOwner(productionID string) (*model.DramaEditTask, error) {
+	var task model.DramaEditTask
+	err := s.repo.DB().Where("open_montage_production_id = ?", productionID).First(&task).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &task, err
 }
 
 func (s *store) decisions(userID, taskID string) ([]model.DramaEditDecision, error) {
@@ -152,6 +191,11 @@ func (s *store) updateProduction(task *model.DramaEditTask) error {
 		"status": task.Status, "stage": task.Stage, "next_action": task.NextAction,
 		"production_task_id": task.ProductionTaskID, "delivery_resource_id": task.DeliveryResourceID,
 		"production_error": task.ProductionError, "updated_at": task.UpdatedAt,
+		"open_montage_production_id":      task.OpenMontageProductionID,
+		"open_montage_access_token":       task.OpenMontageAccessToken,
+		"open_montage_stage":              task.OpenMontageStage,
+		"open_montage_checkpoint_status":  task.OpenMontageCheckpointStatus,
+		"open_montage_report_resource_id": task.OpenMontageReportResourceID,
 	}).Error
 }
 

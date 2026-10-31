@@ -19,7 +19,7 @@ func newAssetLibraryTestRepository(t *testing.T) (*Repository, *gorm.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Asset{}, &model.AssetFolder{}); err != nil {
+	if err := db.AutoMigrate(&model.Asset{}, &model.AssetFolder{}, &model.Resource{}, &model.AssetVersion{}, &model.AssetRepresentation{}); err != nil {
 		t.Fatal(err)
 	}
 	return New(db), db
@@ -51,6 +51,15 @@ func TestUserAssetsPagePaginatesAndIsolatesUsers(t *testing.T) {
 func TestEpisodeAssetFoldersReturnsOwnedActiveVideoFolders(t *testing.T) {
 	repo, db := newAssetLibraryTestRepository(t)
 	now := time.Now().UTC()
+	for _, resource := range []model.Resource{
+		{ID: "resource-1", UserID: "owner", Kind: "video", Status: model.ResourceStatusReady, MimeType: "video/mp4", CreatedAt: now, UpdatedAt: now},
+		{ID: "resource-2", UserID: "owner", Kind: "video", Status: model.ResourceStatusReady, MimeType: "video/mp4", CreatedAt: now, UpdatedAt: now},
+		{ID: "resource-3", UserID: "owner", Kind: "video", Status: model.ResourceStatusReady, MimeType: "video/mp4", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := db.Create(&resource).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, folder := range []model.AssetFolder{
 		{ID: "episode-2", UserID: "owner", Name: "第 2 集", NameKey: "第 2 集", Position: 2, CreatedAt: now, UpdatedAt: now},
 		{ID: "episode-1", UserID: "owner", Name: "第 1 集", NameKey: "第 1 集", Position: 1, CreatedAt: now, UpdatedAt: now},
@@ -62,9 +71,11 @@ func TestEpisodeAssetFoldersReturnsOwnedActiveVideoFolders(t *testing.T) {
 		}
 	}
 	for _, asset := range []model.Asset{
-		{ID: "video-1", UserID: "owner", FolderID: "episode-1", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusConfirmed, Title: "第 1 集", PayloadJSON: "{}", CreatedAt: now, UpdatedAt: now},
-		{ID: "video-2", UserID: "owner", FolderID: "episode-2", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusConfirmed, Title: "第 2 集", PayloadJSON: "{}", CreatedAt: now, UpdatedAt: now},
-		{ID: "video-3", UserID: "owner", FolderID: "episode-2", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusReview, Title: "第 2 集补充", PayloadJSON: "{}", CreatedAt: now, UpdatedAt: now},
+		{ID: "video-1", UserID: "owner", FolderID: "episode-1", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusConfirmed, Title: "第 1 集", PayloadJSON: `{"data":{"storageKey":"resource:resource-1"}}`, CreatedAt: now, UpdatedAt: now},
+		{ID: "video-2", UserID: "owner", FolderID: "episode-2", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusConfirmed, Title: "第 2 集", PayloadJSON: `{"data":{"storageKey":"resource:resource-2"}}`, CreatedAt: now, UpdatedAt: now},
+		{ID: "video-3", UserID: "owner", FolderID: "episode-2", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusReview, Title: "第 2 集补充", PayloadJSON: `{"data":{"storageKey":"resource:resource-3"}}`, CreatedAt: now, UpdatedAt: now},
+		{ID: "delivery-1", UserID: "owner", FolderID: "episode-2", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusConfirmed, Title: "短剧成片", PayloadJSON: `{"data":{"source":"OpenMontage"}}`, CreatedAt: now, UpdatedAt: now},
+		{ID: "delivery-2", UserID: "owner", FolderID: "episode-2", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusConfirmed, Title: "短剧成片（重命名）", PayloadJSON: `{"data":{"source":"OpenMontage"}}`, CreatedAt: now, UpdatedAt: now},
 		{ID: "archived-video", UserID: "owner", FolderID: "archived", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusArchived, Title: "归档", PayloadJSON: "{}", CreatedAt: now, UpdatedAt: now},
 		{ID: "foreign-video", UserID: "other", FolderID: "foreign", Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusConfirmed, Title: "外部", PayloadJSON: "{}", CreatedAt: now, UpdatedAt: now},
 	} {
@@ -77,8 +88,36 @@ func TestEpisodeAssetFoldersReturnsOwnedActiveVideoFolders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 || rows[0].FolderID != "episode-1" || rows[1].FolderID != "episode-2" || rows[1].VideoCount != 2 || len(rows[1].Videos) != 2 || rows[1].Videos[0].AssetID != "video-2" {
+	if len(rows) != 2 || rows[0].FolderID != "episode-1" || rows[1].FolderID != "episode-2" || rows[1].VideoCount != 2 || len(rows[1].Videos) != 2 || rows[1].Videos[0].AssetID != "video-2" || rows[1].Videos[1].AssetID != "video-3" {
 		t.Fatalf("episode folders = %#v", rows)
+	}
+}
+
+func TestEpisodeAssetFoldersExcludeVideoWithoutOwnedReadyResource(t *testing.T) {
+	repo, db := newAssetLibraryTestRepository(t)
+	now := time.Now().UTC()
+	folder := model.AssetFolder{ID: "episode", UserID: "owner", Name: "第 1 集", NameKey: "第 1 集", CreatedAt: now, UpdatedAt: now}
+	if err := db.Create(&folder).Error; err != nil {
+		t.Fatal(err)
+	}
+	assets := []model.Asset{
+		{ID: "blob-only", UserID: "owner", FolderID: folder.ID, Kind: "video", Category: model.AssetCategoryMaterial, Status: model.AssetVersionStatusConfirmed, Title: "浏览器 Blob", PayloadJSON: `{"data":{"storageKey":"video:owner:local"}}`, CreatedAt: now, UpdatedAt: now},
+		{ID: "foreign-resource", UserID: "owner", FolderID: folder.ID, Kind: "video", Category: model.AssetCategoryMaterial, Status: model.AssetVersionStatusConfirmed, Title: "他人资源", PayloadJSON: `{"data":{"storageKey":"resource:foreign"}}`, CreatedAt: now, UpdatedAt: now},
+	}
+	for _, asset := range assets {
+		if err := db.Create(&asset).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Create(&model.Resource{ID: "foreign", UserID: "other", Kind: "video", Status: model.ResourceStatusReady, MimeType: "video/mp4", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows, err := repo.EpisodeAssetFolders("owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("unreadable assets became episode candidates: %#v", rows)
 	}
 }
 

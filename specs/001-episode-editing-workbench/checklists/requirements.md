@@ -1,7 +1,7 @@
-# Specification Quality Checklist: Multi-Episode Editing Workbench
+# Specification Quality Checklist: Short-Drama Editing Workbench
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
-**Created**: 2026-10-29
+**Created**: 2026-10-30
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -38,3 +38,10 @@
   duration ranges, and a compact task-creation workflow on 2026-10-29.
 - Revalidated after adding browser-local asset metadata synchronization requirements; the amendment
   remains user-focused and does not prescribe media transport implementation details.
+- 发布方已选择按 AGPLv3 合规发布包含 OpenMontage 的网络制作能力；FR-052 记录了发布义务。
+- Revalidated on 2026-10-30 after replacing creator-facing multi-episode terminology with
+  short-drama editing, defining task management and delivery actions, and requiring a truthful,
+  readable editorial production report. No clarification is required before planning.
+- Revalidated on 2026-10-30 after defining verified completed-task batch deletion, an explicitly
+  opt-in source-video deletion choice, reference safety, and mandatory real-browser end-to-end
+  deletion validation. No clarification is required before planning.

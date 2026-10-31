@@ -1,9 +1,9 @@
-import { ArrowDownUp, AudioLines, Box, Check, CheckCheck, Clapperboard, Copy, Download, FileText, FileUp, FileX2, FolderOpen, FolderPlus, History, Image as ImageIcon, Images, LayoutGrid, List, Maximize2, MoreHorizontal, Pause, PencilLine, Play, Plus, RotateCcw, Search, SlidersHorizontal, Star, Trash2, Upload, Volume2, VolumeX, X, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
+import { ArrowDownUp, AudioLines, Box, Check, CheckCheck, Clapperboard, Copy, Download, FileText, FileUp, FileX2, FolderOpen, FolderPlus, Image as ImageIcon, LayoutGrid, List, Maximize2, MoreHorizontal, Pause, PencilLine, Play, Search, SlidersHorizontal, Star, Trash2, Upload, Volume2, VolumeX, X, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, Drawer, Dropdown, Form, Input, Modal, Progress, Select, Space, Tag, Typography } from "antd";
 import type { MenuProps } from "antd";
-import { useNavigate, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 
 import { CollectionGrid, PageHeader, PaginationBar, WorkspacePage } from "@/components/layout/workspace-page";
 import { WorkspaceErrorState, WorkspaceLoadingState, WorkspaceState } from "@/components/layout/workspace-state";
@@ -109,7 +109,6 @@ export default function AssetsPage() {
 
 function AssetsPageSession() {
     const { message } = App.useApp();
-    const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const sourceTab = searchParams.get("tab") === "history" ? "history" : "personal";
     const queryClient = useQueryClient();
@@ -135,8 +134,6 @@ function AssetsPageSession() {
     const [kindFilter, setKindFilter] = useState<AssetKind | "all">("all");
     const [categoryFilter, setCategoryFilter] = useState<AssetCategory | "all">("all");
     const [folderFilter, setFolderFilter] = useState<AssetFolderFilter>("all");
-    const [favoriteOnly, setFavoriteOnly] = useState(false);
-    const [recentOnly, setRecentOnly] = useState(false);
     const [projectFilter, setProjectFilter] = useState("all");
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(40);
@@ -144,7 +141,7 @@ function AssetsPageSession() {
     const [historyPage, setHistoryPage] = useState(1);
     const [historyAssets, setHistoryAssets] = useState<LibraryAsset[]>([]);
     const [assetViewMode, setAssetViewMode] = useState<"grid" | "list">(readAssetViewMode);
-    const [filtersOpen, setFiltersOpen] = useState(false);
+    const [filtersOpen, setFiltersOpen] = useState(true);
     const [searchOpen, setSearchOpen] = useState(false);
     const [sortOrder, setSortOrder] = useState<AssetSortOrder>("updated_desc");
     const [editingAsset, setEditingAsset] = useState<LibraryAsset | null>(null);
@@ -173,14 +170,6 @@ function AssetsPageSession() {
         document.addEventListener("pointerdown", dismiss);
         return () => document.removeEventListener("pointerdown", dismiss);
     }, [folderDeleteConfirmId]);
-
-    useEffect(() => {
-        const button = document.querySelector<HTMLElement>(".assets-new-button");
-        if (!button) return;
-        button.style.setProperty("background-color", "#fff", "important");
-        button.style.setProperty("color", "#171717", "important");
-        button.style.setProperty("border-color", "rgba(255,255,255,.82)", "important");
-    });
 
     const [formKind, setFormKind] = useState<AssetKind>("text");
     const [imageDraft, setImageDraft] = useState<ImageDraft>(null);
@@ -218,7 +207,6 @@ function AssetsPageSession() {
 
     const allLibraryAssets = useMemo(() => assets.filter((asset): asset is LibraryAsset => asset.kind !== "entity"), [assets]);
     const activeAssets = useMemo(() => allLibraryAssets.filter((asset) => asset.status !== "archived"), [allLibraryAssets]);
-    const localGenerationHistoryCount = useMemo(() => activeAssets.filter(isWorkspaceGeneratedHistoryAsset).length, [activeAssets]);
     const validAssets = activeAssets;
     const selectedAssets = useMemo(() => validAssets.filter((asset) => selectedIds.includes(asset.id)), [selectedIds, validAssets]);
     const localProjectOptions = useMemo(() => {
@@ -231,10 +219,7 @@ function AssetsPageSession() {
     }, [activeAssets]);
     const filteredAssets = useMemo(() => {
         const query = keyword.trim().toLowerCase();
-        const recentCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
         return validAssets.filter((asset) => {
-            if (favoriteOnly && asset.metadata?.favorite !== true) return false;
-            if (recentOnly && new Date(asset.updatedAt).getTime() < recentCutoff) return false;
             if (projectFilter !== "all" && workspaceAssetProjectLabel(asset) !== projectFilter) return false;
             if (kindFilter !== "all" && asset.kind !== kindFilter) return false;
             if (categoryFilter !== "all" && (asset.category || "other") !== categoryFilter) return false;
@@ -243,10 +228,10 @@ function AssetsPageSession() {
             if (!query) return true;
             return assetSearchText(asset).includes(query);
         });
-    }, [validAssets, keyword, kindFilter, categoryFilter, folderFilter, favoriteOnly, recentOnly, projectFilter]);
+    }, [validAssets, keyword, kindFilter, categoryFilter, folderFilter, projectFilter]);
 
     const assetPageQuery = useQuery({
-        queryKey: assetLibraryQueryKey(entryScope, page, pageSize, "library", kindFilter, categoryFilter, folderFilter, favoriteOnly, recentOnly, projectFilter, debouncedKeyword),
+        queryKey: assetLibraryQueryKey(entryScope, page, pageSize, "library", kindFilter, categoryFilter, folderFilter, projectFilter, debouncedKeyword),
         queryFn: ({ queryKey, signal }) => loadAssetLibraryPage({
             page,
             pageSize,
@@ -256,8 +241,6 @@ function AssetsPageSession() {
             folderId: folderFilter !== "all" && folderFilter !== "uncategorized" ? folderFilter : undefined,
             uncategorized: folderFilter === "uncategorized",
             query: debouncedKeyword || undefined,
-            favorite: favoriteOnly || undefined,
-            recent: recentOnly || undefined,
             project: projectFilter === "all" ? undefined : projectFilter,
             signal,
             expectedScope: expectedScopeFromQueryKey(queryKey),
@@ -313,7 +296,7 @@ function AssetsPageSession() {
     const visibleAssetIds = useMemo(() => visibleAssets.map((asset) => asset.id), [visibleAssets]);
     const allFilteredSelected = visibleAssetIds.length > 0 && visibleAssetIds.every((id) => selectedIds.includes(id));
     const totalAssets = canonicalReads && assetPageQuery.isError ? 0 : remoteReady ? remoteTotal : filteredAssets.length;
-    const hasNarrowingFilters = kindFilter !== "all" || categoryFilter !== "all" || folderFilter !== "all" || Boolean(debouncedKeyword) || favoriteOnly || recentOnly || projectFilter !== "all";
+    const hasNarrowingFilters = kindFilter !== "all" || categoryFilter !== "all" || folderFilter !== "all" || Boolean(debouncedKeyword) || projectFilter !== "all";
     const libraryEmpty = remoteReady
         ? totalAssets === 0 && visibleAssets.length === 0 && !hasNarrowingFilters
         : validAssets.length === 0 && totalAssets === 0;
@@ -325,9 +308,6 @@ function AssetsPageSession() {
         ? assetPageQuery.data?.folderCounts || {}
         : Object.fromEntries([...new Set(activeAssets.map((asset) => asset.folderId).filter((id): id is string => Boolean(id)))].map((folderId) => [folderId, activeAssets.filter((asset) => asset.folderId === folderId).length]));
     const allFoldersCount = remoteReady ? workspaceAssetCountSum(folderCounts) : activeAssets.length;
-    const favoriteCount = remoteReady ? assetPageQuery.data?.favoriteTotal ?? 0 : activeAssets.filter((asset) => asset.metadata?.favorite === true).length;
-    const recentCount = remoteReady ? assetPageQuery.data?.recentTotal ?? 0 : activeAssets.filter((asset) => Number.isFinite(new Date(asset.updatedAt).getTime()) && Date.now() - new Date(asset.updatedAt).getTime() <= 30 * 24 * 60 * 60 * 1000).length;
-    const generationHistoryCount = remoteReady ? assetPageQuery.data?.generatedTotal ?? 0 : localGenerationHistoryCount;
     const remoteProjectCounts = remoteReady ? assetPageQuery.data?.projectCounts : undefined;
     const projectOptions = remoteProjectCounts ? workspaceAssetProjectOptions(remoteProjectCounts) : localProjectOptions;
     const allProjectsCount = remoteProjectCounts ? workspaceAssetAllProjectsCount(remoteProjectCounts) : activeAssets.length;
@@ -809,7 +789,6 @@ function AssetsPageSession() {
                 assets={visibleHistoryAssets}
                 generatedTotal={generatedTotal}
                 generatedKindCounts={generatedKindCounts}
-                libraryTotal={totalAssets}
                 kind={canonicalReads ? historyKind : undefined}
                 hasMore={canonicalReads ? Boolean(historyQuery.data?.canonicalHasMore ?? historyQuery.data?.hasMore) : false}
                 loadingMore={canonicalReads && historyQuery.isFetching}
@@ -828,7 +807,6 @@ function AssetsPageSession() {
                     if (historyQuery.isPlaceholderData) return;
                     setHistoryPage((current) => current + 1);
                 } : undefined}
-                onSelectPersonal={() => navigate("/assets?tab=personal")}
                 onDownload={downloadImage}
                 onDelete={deleteHistoryAsset}
             />
@@ -878,12 +856,14 @@ function AssetsPageSession() {
                                         )}
                                         <button type="button" className={cn("assets-header-compact-button", filtersOpen && "is-active")} aria-label="筛选资产" title="筛选资产" aria-pressed={filtersOpen} onClick={() => setFiltersOpen((open) => !open)}><SlidersHorizontal className="size-4" /></button>
                                     </div>
-                                    <Dropdown trigger={["click"]} menu={{ items: [
-                                        { key: "image", icon: <Images />, label: "上传资产", onClick: () => assetUploadInputRef.current?.click() },
-                                        { key: "folder", icon: <FolderPlus />, label: "新建文件夹", onClick: () => { setFolderName(""); setFolderEditor("new"); } },
-                                    ] }}>
-                                        <Button className="assets-new-button" style={{ backgroundColor: "#fff", color: "#171717", borderColor: "rgba(255,255,255,.82)" }} icon={<Plus />}>新建</Button>
-                                    </Dropdown>
+                                    <Space size={8}>
+                                        <Button icon={<FolderPlus />} onClick={() => { setFolderName(""); setFolderEditor("new"); }}>
+                                            新建文件夹
+                                        </Button>
+                                        <Button type="primary" icon={<Upload />} onClick={() => assetUploadInputRef.current?.click()}>
+                                            上传资产
+                                        </Button>
+                                    </Space>
                                 </div>
                             </div>
                         }
@@ -942,7 +922,7 @@ function AssetsPageSession() {
                             />
                             <section className="collection-filter-group assets-folder-filter">
                                 <div className="collection-folder-heading">
-                                    <span className="collection-filter-label">我的分类</span>
+                                    <span className="collection-filter-label">我的短剧</span>
                                     <button type="button" className="assets-folder-add" title="新建分类" aria-label="新建分类" onClick={() => { setFolderName(""); setFolderEditor("new"); }}><FolderPlus className="size-3.5" /></button>
                                 </div>
                                 <div className="collection-folder-list">
@@ -1062,22 +1042,11 @@ function AssetsPageSession() {
                                         </button>
                                         {projectOptions.map((project) => {
                                             const count = remoteProjectCounts ? remoteProjectCounts[project] ?? 0 : activeAssets.filter((asset) => workspaceAssetProjectLabel(asset) === project).length;
-                                            return <button key={project} type="button" aria-pressed={projectFilter === project} className={`assets-filter-item ${projectFilter === project ? "is-active" : ""}`} onClick={() => { setProjectFilter(project); setRecentOnly(false); setPage(1); }}><span className="assets-filter-item-label truncate">{project}</span><span className="assets-filter-count">{count}</span></button>;
+                                            return <button key={project} type="button" aria-pressed={projectFilter === project} className={`assets-filter-item ${projectFilter === project ? "is-active" : ""}`} onClick={() => { setProjectFilter(project); setPage(1); }}><span className="assets-filter-item-label truncate">{project}</span><span className="assets-filter-count">{count}</span></button>;
                                         })}
                                     </div>
                                 </section>
                             ) : null}
-                            <section className="collection-filter-group assets-quick-filter" aria-label="快捷筛选">
-                                <span className="collection-filter-label">快捷筛选</span>
-                                <button type="button" aria-pressed={recentOnly} className={`assets-filter-item ${recentOnly ? "is-active" : ""}`} onClick={() => { setRecentOnly((value) => !value); setFavoriteOnly(false); setPage(1); }}>
-                                    <span className="assets-filter-item-label flex items-center gap-1.5"><RotateCcw className="size-3.5" />最近使用</span>
-                                    <span className="assets-filter-count">{recentCount}</span>
-                                </button>
-                                <button type="button" aria-pressed={favoriteOnly} className={`assets-filter-item ${favoriteOnly ? "is-active" : ""}`} onClick={() => { setFavoriteOnly((value) => !value); setRecentOnly(false); setPage(1); }}>
-                                    <span className="assets-filter-item-label flex items-center gap-1.5"><Star className="size-3.5" />我的收藏</span>
-                                    <span className="assets-filter-count">{favoriteCount}</span>
-                                </button>
-                            </section>
                             </div>
                         </aside>
                         <section className="min-w-0">
@@ -1139,20 +1108,6 @@ function AssetsPageSession() {
                         </section>
                     </div>
                 </div>
-                <aside className="assets-library-source-rail" aria-label="资产来源导航">
-                    <div className="assets-library-source-rail-inner">
-                        <button type="button" className="assets-library-source-rail-item" onClick={() => navigate("/assets?tab=history")}>
-                            <span className="assets-library-source-rail-icon"><History className="size-3.5" /></span>
-                            <span>生成历史</span>
-                            <span className="assets-filter-count">{generationHistoryCount}</span>
-                        </button>
-                        <button type="button" className="assets-library-source-rail-item is-active" aria-current="page">
-                            <span className="assets-library-source-rail-icon"><FolderOpen className="size-3.5" /></span>
-                            <span>个人资产库</span>
-                            <span className="assets-filter-count">{totalAssets}</span>
-                        </button>
-                    </div>
-                </aside>
             </WorkspacePage>
 
             <Modal
@@ -1309,20 +1264,6 @@ function AssetsPageSession() {
             </Modal>
 
             <AssetDrawer asset={previewAsset} onClose={() => setPreviewAsset(null)} onCopy={copyAssetText} onDownload={downloadImage} />
-
-            <Modal
-                className="library-modal library-confirm-modal assets-folder-create-modal"
-                title="新建分类"
-                open={folderEditor === "new"}
-                confirmLoading={folderSaving}
-                onCancel={() => { if (!folderSaving) { setFolderEditor(null); setFolderName(""); } }}
-                onOk={() => void saveFolder()}
-                okButtonProps={{ className: "assets-folder-create-confirm" }}
-                okText="保存"
-                cancelText="取消"
-            >
-                <Input autoFocus value={folderName} maxLength={40} placeholder="例如：角色参考、场景灵感" onChange={(event) => setFolderName(event.target.value)} onPressEnter={() => void saveFolder()} />
-            </Modal>
 
             <input ref={assetInputRef} type="file" accept="application/zip,.zip" className="hidden" onChange={(event) => void importAssetZip(event.target.files?.[0])} />
             <input
@@ -1552,28 +1493,24 @@ function GenerationHistorySurface({
     assets,
     generatedTotal,
     generatedKindCounts,
-    libraryTotal,
     kind,
     hasMore = false,
     loadingMore = false,
     loadMoreError = false,
     onKindChange,
     onLoadMore,
-    onSelectPersonal,
     onDownload,
     onDelete,
 }: {
     assets: LibraryAsset[];
     generatedTotal: number;
     generatedKindCounts: Record<string, number>;
-    libraryTotal: number;
     kind?: GenerationHistoryKind;
     hasMore?: boolean;
     loadingMore?: boolean;
     loadMoreError?: boolean;
     onKindChange?: (kind: GenerationHistoryKind) => void;
     onLoadMore?: () => void;
-    onSelectPersonal: () => void;
     onDownload: (asset: LibraryAsset) => void;
     onDelete: (asset: LibraryAsset) => Promise<boolean | undefined>;
 }) {
@@ -1690,18 +1627,6 @@ function GenerationHistorySurface({
                     )
                 ) : null}
             </div>
-            <aside className="assets-library-source-rail" aria-label="资产来源导航">
-                <div className="assets-library-source-rail-inner">
-                    <button type="button" className="assets-library-source-rail-item is-active" aria-current="page">
-                        <span className="assets-library-source-rail-icon"><History className="size-3.5" /></span>
-                        <span>生成历史</span><span className="assets-filter-count">{counts.all}</span>
-                    </button>
-                    <button type="button" className="assets-library-source-rail-item" onClick={onSelectPersonal}>
-                        <span className="assets-library-source-rail-icon"><FolderOpen className="size-3.5" /></span>
-                        <span>个人资产库</span><span className="assets-filter-count">{libraryTotal}</span>
-                    </button>
-                </div>
-            </aside>
         </WorkspacePage>
         <Modal
             className="library-modal library-confirm-modal"

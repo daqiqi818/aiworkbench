@@ -1,6 +1,8 @@
 package dramaedit
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,9 +25,20 @@ type ValidationError struct{ Message string }
 func (e *ValidationError) Error() string { return e.Message }
 
 type Service struct {
-	repo       *repository.Repository
-	store      *store
-	production ProductionStarter
+	repo         *repository.Repository
+	store        *store
+	production   ProductionStarter
+	native       NativeRuntime
+	importer     DeliveryImporter
+	assetDeleter AssetDeleter
+}
+
+func NewNative(repo *repository.Repository, runtime NativeRuntime, importer DeliveryImporter, deleter ...AssetDeleter) *Service {
+	service := &Service{repo: repo, store: newStore(repo), native: runtime, importer: importer}
+	if len(deleter) > 0 {
+		service.assetDeleter = deleter[0]
+	}
+	return service
 }
 
 func New(repo *repository.Repository, production ...ProductionStarter) *Service {
@@ -126,7 +139,106 @@ func (s *Service) Approve(userID, id string) (Task, error) {
 func (s *Service) StartProduction(userID, id string) (Task, error) {
 	return s.startProduction(userID, id, true)
 }
+func (s *Service) Delete(userID string, request DeleteRequest) ([]DeleteResult, error) {
+	ids := request.IDs
+	if len(ids) == 0 || len(ids) > 100 {
+		return nil, &ValidationError{Message: "请选择 1 到 100 个任务"}
+	}
+	if request.DeleteEpisodeFiles && s.assetDeleter == nil {
+		return nil, &ValidationError{Message: "剧集文件删除服务不可用"}
+	}
+	results := make([]DeleteResult, 0, len(ids))
+	filesByTask := make(map[string][]string)
+	seen := map[string]struct{}{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		stored, err := s.store.get(userID, id)
+		if err != nil {
+			results = append(results, DeleteResult{ID: id, Reason: "任务不存在或无权访问"})
+			continue
+		}
+		if stored.Status == model.DramaEditStatusProcessing || stored.Status == model.DramaEditStatusApproved {
+			if stored.OpenMontageProductionID == "" || s.native == nil {
+				results = append(results, DeleteResult{ID: id, Reason: "进行中的任务缺少可用的 OpenMontage 停止通道，未删除"})
+				continue
+			}
+			state, cancelErr := s.native.Cancel(userID, stored.OpenMontageProductionID)
+			if cancelErr != nil {
+				results = append(results, DeleteResult{ID: id, Reason: "无法停止 OpenMontage 制作，未删除：" + cancelErr.Error()})
+				continue
+			}
+			if state.Status != "cancelled" {
+				results = append(results, DeleteResult{ID: id, Reason: "OpenMontage 未确认停止，未删除"})
+				continue
+			}
+		}
+		if err := s.store.delete(userID, id); err != nil {
+			return nil, err
+		}
+		if request.DeleteEpisodeFiles {
+			var episodes []Episode
+			if err := json.Unmarshal([]byte(stored.EpisodesJSON), &episodes); err != nil {
+				return nil, err
+			}
+			for _, episode := range episodes {
+				filesByTask[id] = append(filesByTask[id], episode.AssetID)
+			}
+		}
+		results = append(results, DeleteResult{ID: id, Deleted: true})
+	}
+	if !request.DeleteEpisodeFiles {
+		return results, nil
+	}
+	fileResults := make(map[string]EpisodeFileDeleteResult)
+	for _, assetID := range uniqueAssetIDs(filesByTask) {
+		referenced, err := s.store.episodeReferencedByTask(userID, assetID)
+		if err != nil {
+			return nil, err
+		}
+		if referenced {
+			fileResults[assetID] = EpisodeFileDeleteResult{AssetID: assetID, Reason: "仍被其他短剧剪辑任务引用"}
+			continue
+		}
+		if err := s.assetDeleter.DeleteUserAsset(userID, assetID); err != nil {
+			fileResults[assetID] = EpisodeFileDeleteResult{AssetID: assetID, Reason: err.Error()}
+			continue
+		}
+		fileResults[assetID] = EpisodeFileDeleteResult{AssetID: assetID, Deleted: true}
+	}
+	for index := range results {
+		for _, assetID := range filesByTask[results[index].ID] {
+			results[index].EpisodeFiles = append(results[index].EpisodeFiles, fileResults[assetID])
+		}
+	}
+	return results, nil
+}
+
+func uniqueAssetIDs(filesByTask map[string][]string) []string {
+	seen := map[string]struct{}{}
+	ids := []string{}
+	for _, values := range filesByTask {
+		for _, id := range values {
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
 func (s *Service) Cancel(userID, id, note string) (Task, error) {
+	if stored, err := s.store.get(userID, id); err == nil && stored.OpenMontageProductionID != "" && s.native != nil {
+		if _, cancelErr := s.native.Cancel(userID, stored.OpenMontageProductionID); cancelErr != nil {
+			return Task{}, &ValidationError{Message: "无法取消 OpenMontage 制作：" + cancelErr.Error()}
+		}
+	}
 	return s.decide(userID, id, "cancelled", strings.TrimSpace(note), []model.DramaEditStatus{model.DramaEditStatusAwaitingApproval, model.DramaEditStatusRevisionRequested, model.DramaEditStatusApproved, model.DramaEditStatusBlocked})
 }
 
@@ -248,7 +360,7 @@ func buildProposal(request CreateRequest, selected []Episode) Proposal {
 }
 
 func decodeTask(stored model.DramaEditTask, decisions []model.DramaEditDecision) (Task, error) {
-	result := Task{ID: stored.ID, DramaTitle: stored.DramaTitle, Status: string(stored.Status), Stage: stored.Stage, NextAction: stored.NextAction, ProductionTaskID: stored.ProductionTaskID, DeliveryResourceID: stored.DeliveryResourceID, ProductionError: stored.ProductionError, CreatedAt: stored.CreatedAt, UpdatedAt: stored.UpdatedAt}
+	result := Task{ID: stored.ID, DramaTitle: stored.DramaTitle, Status: string(stored.Status), Stage: stored.Stage, NextAction: stored.NextAction, ProductionTaskID: stored.ProductionTaskID, DeliveryResourceID: stored.DeliveryResourceID, ProductionError: stored.ProductionError, OpenMontageProductionID: stored.OpenMontageProductionID, OpenMontageStage: stored.OpenMontageStage, OpenMontageCheckpointStatus: stored.OpenMontageCheckpointStatus, RenderReportResourceID: stored.OpenMontageReportResourceID, CreatedAt: stored.CreatedAt, UpdatedAt: stored.UpdatedAt}
 	if err := json.Unmarshal([]byte(stored.DeliveryJSON), &result.DeliveryPreferences); err != nil {
 		return Task{}, err
 	}
@@ -271,6 +383,9 @@ func (s *Service) startProduction(userID, id string, historical bool) (Task, err
 	stored, err := s.store.get(userID, id)
 	if err != nil {
 		return Task{}, err
+	}
+	if s.native != nil {
+		return s.startNativeProduction(userID, stored)
 	}
 	retry := false
 	if stored.ProductionTaskID != "" {
@@ -333,6 +448,137 @@ func (s *Service) startProduction(userID, id string, historical bool) (Task, err
 	return s.Get(userID, id)
 }
 
+func (s *Service) startNativeProduction(userID string, stored *model.DramaEditTask) (Task, error) {
+	if stored.Status != model.DramaEditStatusApproved && stored.Status != model.DramaEditStatusBlocked {
+		return Task{}, ErrInvalidTransition
+	}
+	if stored.OpenMontageProductionID != "" {
+		return s.Get(userID, stored.ID)
+	}
+	var delivery DeliveryPreferences
+	var episodes []Episode
+	if err := json.Unmarshal([]byte(stored.DeliveryJSON), &delivery); err != nil {
+		return Task{}, err
+	}
+	if err := json.Unmarshal([]byte(stored.EpisodesJSON), &episodes); err != nil {
+		return Task{}, err
+	}
+	assetIDs := make([]string, 0, len(episodes))
+	for _, episode := range episodes {
+		assetIDs = append(assetIDs, episode.AssetID)
+	}
+	resources, err := s.store.episodeResources(userID, assetIDs)
+	if err != nil {
+		return Task{}, err
+	}
+	resourceIDs := make([]string, 0, len(episodes))
+	for _, episode := range episodes {
+		resource, exists := resources[episode.AssetID]
+		if !exists {
+			return s.blockProduction(stored, "所选剧集没有可读取的视频资源")
+		}
+		resourceIDs = append(resourceIDs, resource.ID)
+	}
+	productionID := "om-" + stored.ID
+	accessToken, err := newProductionToken()
+	if err != nil {
+		return Task{}, err
+	}
+	state, err := s.native.Create(userID, productionID, stored.DramaTitle, delivery, resourceIDs, accessToken)
+	if err != nil {
+		return s.blockProduction(stored, "无法创建 OpenMontage 制作："+err.Error())
+	}
+	// Persist the scoped broker capability before the Runner begins reading any
+	// source. The broker resolves the production back to this task on each read.
+	stored.OpenMontageProductionID, stored.OpenMontageAccessToken = productionID, accessToken
+	applyNativeProjection(stored, state)
+	stored.UpdatedAt = now()
+	if err := s.store.updateProduction(stored); err != nil {
+		return Task{}, err
+	}
+	state, err = s.native.Run(userID, productionID)
+	if err != nil {
+		return s.blockProduction(stored, "无法启动 OpenMontage 制作："+err.Error())
+	}
+	applyNativeProjection(stored, state)
+	stored.UpdatedAt = now()
+	if err := s.store.updateProduction(stored); err != nil {
+		return Task{}, err
+	}
+	return s.Get(userID, stored.ID)
+}
+
+func newProductionToken() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func (s *Service) ApproveNativeStage(userID, id, stage, note string) (Task, error) {
+	stored, err := s.store.get(userID, id)
+	if err != nil {
+		return Task{}, err
+	}
+	if s.native == nil || stored.OpenMontageProductionID == "" {
+		return Task{}, ErrInvalidTransition
+	}
+	state, err := s.native.ApproveStage(userID, stored.OpenMontageProductionID, strings.TrimSpace(stage), strings.TrimSpace(note))
+	if err != nil {
+		return s.blockProduction(stored, "OpenMontage 阶段审批失败："+err.Error())
+	}
+	applyNativeProjection(stored, state)
+	stored.UpdatedAt = now()
+	if err := s.store.updateProduction(stored); err != nil {
+		return Task{}, err
+	}
+	return s.Get(userID, id)
+}
+
+func (s *Service) ValidateOpenMontageSource(userID, productionID, resourceID, accessToken string) error {
+	stored, err := s.store.byOpenMontageProduction(userID, productionID)
+	if err != nil {
+		return err
+	}
+	if stored.OpenMontageAccessToken == "" || accessToken != stored.OpenMontageAccessToken {
+		return &ValidationError{Message: "OpenMontage 源资源访问未授权"}
+	}
+	var episodes []Episode
+	if err := json.Unmarshal([]byte(stored.EpisodesJSON), &episodes); err != nil {
+		return err
+	}
+	resources, err := s.store.episodeResources(userID, episodeAssetIDs(episodes))
+	if err != nil {
+		return err
+	}
+	for _, resource := range resources {
+		if resource.ID == resourceID {
+			return nil
+		}
+	}
+	return &ValidationError{Message: "资源不属于此 OpenMontage 制作"}
+}
+
+func (s *Service) ValidateOpenMontageSourceByProduction(productionID, resourceID, accessToken string) (string, error) {
+	stored, err := s.store.byOpenMontageProductionAnyOwner(productionID)
+	if err != nil {
+		return "", err
+	}
+	if err := s.ValidateOpenMontageSource(stored.UserID, productionID, resourceID, accessToken); err != nil {
+		return "", err
+	}
+	return stored.UserID, nil
+}
+
+func episodeAssetIDs(episodes []Episode) []string {
+	ids := make([]string, 0, len(episodes))
+	for _, episode := range episodes {
+		ids = append(ids, episode.AssetID)
+	}
+	return ids
+}
+
 func (s *Service) blockProduction(stored *model.DramaEditTask, reason string) (Task, error) {
 	stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusBlocked, "制作受阻", "检查素材或本地制作环境后重新开始制作", reason
 	stored.UpdatedAt = now()
@@ -343,6 +589,48 @@ func (s *Service) blockProduction(stored *model.DramaEditTask, reason string) (T
 }
 
 func (s *Service) projectTask(stored model.DramaEditTask) (Task, error) {
+	if stored.OpenMontageProductionID != "" && s.native != nil {
+		state, err := s.native.Status(stored.UserID, stored.OpenMontageProductionID)
+		if err != nil {
+			return s.blockProduction(&stored, "无法读取 OpenMontage 制作状态："+err.Error())
+		}
+		applyNativeProjection(&stored, state)
+		if state.Status == "completed" && (stored.DeliveryResourceID == "" || stored.OpenMontageReportResourceID == "") {
+			if s.importer == nil {
+				return s.blockProduction(&stored, "OpenMontage 交付导入服务不可用")
+			}
+			var episodes []Episode
+			if err := json.Unmarshal([]byte(stored.EpisodesJSON), &episodes); err != nil || len(episodes) == 0 {
+				return s.blockProduction(&stored, "无法确定成片归属文件夹")
+			}
+			video, report, importErr := s.importer.ImportOpenMontageDelivery(stored.UserID, episodes[0].FolderID, stored.DramaTitle, stored.OpenMontageProductionID, s.native)
+			if importErr != nil {
+				return s.blockProduction(&stored, "无法将 OpenMontage 成片导入 BeefTV 资产："+importErr.Error())
+			}
+			stored.DeliveryResourceID, stored.OpenMontageReportResourceID = video, report
+			stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusCompleted, "成片已回传资产", "查看或下载成片和渲染报告", ""
+		}
+		if state.Status == "completed" && stored.DeliveryResourceID != "" && stored.OpenMontageReportResourceID != "" {
+			stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusCompleted, "成片已回传资产", "查看或下载成片和渲染报告", ""
+		}
+		stored.UpdatedAt = now()
+		if err := s.store.updateProduction(&stored); err != nil {
+			return Task{}, err
+		}
+		result, err := decodeTask(stored, nil)
+		if err != nil {
+			return Task{}, err
+		}
+		result.OpenMontageRequiresApproval = state.RequiresApproval
+		result.ProductionProgress = nativeProgress(state)
+		if stored.DeliveryResourceID != "" {
+			result.DeliveryURL = assets.FileURL(stored.DeliveryResourceID)
+		}
+		if stored.OpenMontageReportResourceID != "" {
+			result.RenderReportURL = assets.FileURL(stored.OpenMontageReportResourceID)
+		}
+		return result, nil
+	}
 	if stored.ProductionTaskID != "" {
 		work, err := s.store.task(stored.UserID, stored.ProductionTaskID)
 		if err != nil {
@@ -370,6 +658,40 @@ func (s *Service) projectTask(stored model.DramaEditTask) (Task, error) {
 		}
 	}
 	return result, nil
+}
+
+func nativeProgress(state NativeState) int {
+	if state.Status == "completed" {
+		return 100
+	}
+	stages := []string{"research", "proposal", "script", "scene_plan", "assets", "edit", "compose", "publish"}
+	for index, stage := range stages {
+		if state.CurrentStage == stage {
+			return (index * 100) / (len(stages) - 1)
+		}
+	}
+	return 0
+}
+
+func applyNativeProjection(stored *model.DramaEditTask, state NativeState) {
+	stored.OpenMontageStage, stored.OpenMontageCheckpointStatus = state.CurrentStage, state.CheckpointStatus
+	switch state.Status {
+	case "awaiting_approval":
+		stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusProcessing, "OpenMontage："+state.CurrentStage, "审核并批准当前 OpenMontage 阶段", ""
+	case "ready_to_run", "running":
+		stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusProcessing, "OpenMontage："+state.CurrentStage, "OpenMontage 制作进行中", ""
+	case "completed":
+		stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusProcessing, "OpenMontage 成片导入中", "正在导入成片和渲染报告到 BeefTV 资产", ""
+	case "cancelled":
+		stored.Status, stored.Stage, stored.NextAction = model.DramaEditStatusCancelled, "已取消", "任务已停止"
+	case "blocked":
+		stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusBlocked, "OpenMontage 制作受阻", "检查 OpenMontage 制作状态后重新开始", state.Error
+		if stored.ProductionError == "" {
+			stored.ProductionError = "OpenMontage 制作未完成"
+		}
+	default:
+		stored.Status, stored.Stage, stored.NextAction, stored.ProductionError = model.DramaEditStatusBlocked, "OpenMontage 制作受阻", "检查 OpenMontage 制作状态后重新开始", "OpenMontage 返回未知状态："+state.Status
+	}
 }
 
 func applyProductionProjection(stored *model.DramaEditTask, work *model.Task) {

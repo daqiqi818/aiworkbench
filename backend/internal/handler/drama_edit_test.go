@@ -43,3 +43,15 @@ func TestRegisterDramaEditingRoutesIncludesEpisodeFolders(t *testing.T) {
 	}
 	t.Fatal("episode folder route was not registered")
 }
+
+func TestRegisterDramaEditingRoutesIncludesDeleteTasks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	RegisterDramaEditingRoutes(router.Group("/api"), nil)
+	for _, route := range router.Routes() {
+		if route.Method == http.MethodDelete && route.Path == "/api/drama-editing/tasks" {
+			return
+		}
+	}
+	t.Fatal("task deletion route was not registered")
+}

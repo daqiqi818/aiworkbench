@@ -5,6 +5,8 @@ import { deleteWorkspaceAssetRecord, putWorkspaceAsset } from "@/services/api/wo
 import { normalizeAssetCategory } from "@/lib/asset-category";
 import { assertUserScope, captureUserScope, userScopeMatches, UserScopeAbandonedError, type CapturedUserScope } from "@/lib/user-scope-guard";
 import { usesBrowserLocalResourceStore, workspaceAssetHasCanonicalMediaPersist } from "@/services/workspace-resource-storage";
+import { resourceFileUrl, resourceStorageKey, uploadResourceFile } from "@/services/api/resources";
+import { getLocalMediaBlob } from "@/services/local-media-repository";
 import { migrateBrowserLocalAssetFolders } from "@/services/workspace-asset-folders";
 import { loadWorkspaceAssetsForUse } from "@/services/workspace-asset-read";
 import {
@@ -426,6 +428,8 @@ export async function persistWorkspaceAssetChanges(expectedScope?: CapturedUserS
         assertUserScope(expected);
         await migrateBrowserLocalAssetFolders(expected);
         assertUserScope(expected);
+        await backfillBrowserLocalVideoResources(expected);
+        assertUserScope(expected);
         for (const asset of useAssetStore.getState().assets) {
             if (asset.kind === "entity" || !workspaceAssetHasCanonicalMediaPersist(asset)) continue;
             const saved = await putWorkspaceAsset(asset.id, asset, { expectedScope: expected });
@@ -441,4 +445,46 @@ export async function persistWorkspaceAssetChanges(expectedScope?: CapturedUserS
     const drafts = readAssetStoreDrafts(expected);
     const ids = [...new Set([...drafts.upserts, ...drafts.deletes].map((draft) => draft.id))];
     await Promise.all(ids.map((id) => enqueueAssetCommit(expected.userScope, id, expected.epoch, () => commitTrackedAssetDraft(id, expected))));
+}
+
+/**
+ * Repairs legacy browser-local videos before an owner-scoped workflow reads
+ * them. Missing Blob bytes are deliberately left untouched and therefore fail
+ * the canonical-media predicate instead of being advertised as renderable.
+ */
+async function backfillBrowserLocalVideoResources(expected: CapturedUserScope) {
+    for (const asset of useAssetStore.getState().assets) {
+        if (asset.kind !== "video" || workspaceAssetHasCanonicalMediaPersist(asset)) continue;
+        const storageKey = "storageKey" in asset.data && typeof asset.data.storageKey === "string" ? asset.data.storageKey : "";
+        if (!storageKey) continue;
+        const blob = await getLocalMediaBlob(storageKey);
+        assertUserScope(expected);
+        if (!blob) continue;
+        const width = "width" in asset.data && typeof asset.data.width === "number" ? asset.data.width : undefined;
+        const height = "height" in asset.data && typeof asset.data.height === "number" ? asset.data.height : undefined;
+        const durationMs = "durationMs" in asset.data && typeof asset.data.durationMs === "number" ? asset.data.durationMs : undefined;
+        const resource = await uploadResourceFile(blob, "video", {
+            fileName: `${asset.title || asset.id}.mp4`,
+            width,
+            height,
+            durationMs,
+            idempotencyKey: `legacy-video:${asset.id}:${storageKey}`,
+            expectedScope: expected,
+        });
+        assertUserScope(expected);
+        runAssetStoreProjection(() => {
+            useAssetStore.getState().updateAsset(asset.id, {
+                data: {
+                    ...asset.data,
+                    storageKey: resourceStorageKey(resource.id),
+                    url: resource.publicUrl || resourceFileUrl(resource.id),
+                    mimeType: resource.mimeType || blob.type,
+                    bytes: resource.size || blob.size,
+                    width: resource.width || width || 0,
+                    height: resource.height || height || 0,
+                    durationMs: resource.durationMs || durationMs || 0,
+                },
+            });
+        });
+    }
 }

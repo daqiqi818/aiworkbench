@@ -44,8 +44,12 @@ type DramaEditingPort interface {
 	Get(string, string) (dramaedit.Task, error)
 	Approve(string, string) (dramaedit.Task, error)
 	StartProduction(string, string) (dramaedit.Task, error)
+	Delete(string, dramaedit.DeleteRequest) ([]dramaedit.DeleteResult, error)
 	RequestRevision(string, string, string) (dramaedit.Task, error)
 	Cancel(string, string, string) (dramaedit.Task, error)
+	ApproveNativeStage(string, string, string, string) (dramaedit.Task, error)
+	ValidateOpenMontageSource(string, string, string, string) error
+	ValidateOpenMontageSourceByProduction(string, string, string) (string, error)
 }
 
 type ProviderConfigPort interface {

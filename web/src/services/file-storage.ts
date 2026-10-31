@@ -94,7 +94,10 @@ export async function uploadMediaFile(input: Blob, prefix = "file", onProgress?:
         }
         assertUserScope(expected);
 
-        if (usesBrowserLocalResourceStore()) {
+        // A browser-local video still has to be readable by the backend and the
+        // isolated OpenMontage runner. Keep the local-only behavior for other
+        // media, but never acknowledge a video Blob as a production source.
+        if (usesBrowserLocalResourceStore() && !blob.type.startsWith("video/")) {
             assertUserScope(expected);
             await saveLocalMedia(storageKey, blob, previewUrl);
             retainPreviewUrl = true;

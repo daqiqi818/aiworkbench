@@ -4,8 +4,20 @@ This file records direct dependencies and bundled third-party assets in the
 BeefTV public source snapshot. Transitive dependency notices remain available
 in the dependency packages installed from `bun.lock` and `backend/go.sum`.
 
-BeefTV's MIT license applies only to BeefTV-authored material. Each component
-below remains subject to its own license.
+BeefTV is distributed under AGPLv3-or-later. Each component below remains
+subject to its own license.
+
+## OpenMontage production source
+
+`third_party/openmontage/` is a clean, pinned source snapshot of OpenMontage
+from `https://github.com/dajiang7788/OpenMontage.git` at commit
+`9590f5639a0fe8b32d54dd74e196b8ea02191453`. It is licensed under AGPLv3-or-later.
+Its complete license text is retained at `third_party/openmontage/LICENSE`; the
+import record and exclusions are in `third_party/openmontage/UPSTREAM.md`.
+
+Published deployments that expose this production capability must make their
+corresponding source, including local modifications and runner integration,
+available to network users under the same terms.
 
 ## Frontend runtime dependencies
 

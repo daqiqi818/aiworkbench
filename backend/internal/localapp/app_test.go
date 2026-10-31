@@ -52,11 +52,21 @@ func (fakePorts) RequestRevision(string, string, string) (dramaedit.Task, error)
 	return dramaedit.Task{}, nil
 }
 func (fakePorts) Cancel(string, string, string) (dramaedit.Task, error) { return dramaedit.Task{}, nil }
-func (fakePorts) ReadLocalModelConfig() ([]byte, error)                 { return nil, nil }
-func (fakePorts) SaveLocalModelConfig([]byte) error                     { return nil }
-func (fakePorts) StartWorker()                                          {}
-func (fakePorts) StopWorker(context.Context) error                      { return nil }
-func (fakePorts) Close() error                                          { return nil }
+func (fakePorts) Delete(string, dramaedit.DeleteRequest) ([]dramaedit.DeleteResult, error) {
+	return nil, nil
+}
+func (fakePorts) ApproveNativeStage(string, string, string, string) (dramaedit.Task, error) {
+	return dramaedit.Task{}, nil
+}
+func (fakePorts) ValidateOpenMontageSource(string, string, string, string) error { return nil }
+func (fakePorts) ValidateOpenMontageSourceByProduction(string, string, string) (string, error) {
+	return "", nil
+}
+func (fakePorts) ReadLocalModelConfig() ([]byte, error) { return nil, nil }
+func (fakePorts) SaveLocalModelConfig([]byte) error     { return nil }
+func (fakePorts) StartWorker()                          {}
+func (fakePorts) StopWorker(context.Context) error      { return nil }
+func (fakePorts) Close() error                          { return nil }
 
 var (
 	_ TaskPort       = fakePorts{}

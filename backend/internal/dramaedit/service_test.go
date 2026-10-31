@@ -3,6 +3,8 @@ package dramaedit
 import (
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +15,40 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+type recordingAssetDeleter struct{ deleted []string }
+
+func (d *recordingAssetDeleter) DeleteUserAsset(_ string, assetID string, _ ...string) error {
+	d.deleted = append(d.deleted, assetID)
+	return nil
+}
+
+type recordingNativeRuntime struct {
+	cancelled []string
+	cancelErr error
+	state     NativeState
+}
+
+func (r *recordingNativeRuntime) Create(string, string, string, DeliveryPreferences, []string, string) (NativeState, error) {
+	return NativeState{}, nil
+}
+func (r *recordingNativeRuntime) Run(string, string) (NativeState, error) { return NativeState{}, nil }
+func (r *recordingNativeRuntime) Status(string, string) (NativeState, error) {
+	return r.state, nil
+}
+func (r *recordingNativeRuntime) ApproveStage(string, string, string, string) (NativeState, error) {
+	return NativeState{}, nil
+}
+func (r *recordingNativeRuntime) Cancel(_ string, productionID string) (NativeState, error) {
+	r.cancelled = append(r.cancelled, productionID)
+	if r.cancelErr != nil {
+		return NativeState{}, r.cancelErr
+	}
+	return NativeState{ProductionID: productionID, Status: "cancelled"}, nil
+}
+func (r *recordingNativeRuntime) Artifact(string, string, string) (io.ReadCloser, error) {
+	return nil, errors.New("not implemented")
+}
 
 func newTestService(t *testing.T) (*Service, *gorm.DB) {
 	t.Helper()
@@ -67,7 +103,11 @@ func seedEpisodeFolder(t *testing.T, db *gorm.DB, userID, folderID, name string,
 		videoIDs = []string{"asset-" + folderID}
 	}
 	for _, videoID := range videoIDs {
-		if err := db.Create(&model.Asset{ID: videoID, UserID: userID, FolderID: folderID, Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusConfirmed, Title: name + " " + videoID, PayloadJSON: "{}", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		resourceID := videoID + "-source"
+		if err := db.Create(&model.Resource{ID: resourceID, UserID: userID, Kind: "video", Status: model.ResourceStatusReady, MimeType: "video/mp4", DurationMs: 60_000, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&model.Asset{ID: videoID, UserID: userID, FolderID: folderID, Kind: "video", Category: model.AssetCategoryOther, Status: model.AssetVersionStatusConfirmed, Title: name + " " + videoID, PayloadJSON: `{"data":{"storageKey":"resource:` + resourceID + `"}}`, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -90,6 +130,153 @@ func TestCreateUsesSelectedEpisodeVideos(t *testing.T) {
 	}
 	if _, err := service.Get("other", task.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("foreign get err = %v", err)
+	}
+}
+
+func TestDeleteCompletedTasksAndOptionalEpisodeFiles(t *testing.T) {
+	service, db := newTestService(t)
+	seedEpisodeFolder(t, db, "owner", "folder-1", "第 1 集", 0)
+	seedEpisodeFolder(t, db, "owner", "folder-2", "第 2 集", 1)
+	first, err := service.Create("owner", validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Create("owner", validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.DramaEditTask{}).Where("id IN ?", []string{first.ID, second.ID}).Update("status", model.DramaEditStatusCompleted).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Delete("owner", DeleteRequest{IDs: []string{first.ID, second.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 2 || !result[0].Deleted || !result[1].Deleted {
+		t.Fatalf("result = %#v", result)
+	}
+	var assets int64
+	if err := db.Model(&model.Asset{}).Where("user_id = ?", "owner").Count(&assets).Error; err != nil || assets != 2 {
+		t.Fatalf("assets=%d err=%v, want retained", assets, err)
+	}
+}
+
+func TestDeleteProcessingTaskCancelsOpenMontageBeforeDeleting(t *testing.T) {
+	service, db := newTestService(t)
+	runtime := &recordingNativeRuntime{}
+	service.native = runtime
+	seedEpisodeFolder(t, db, "owner", "folder-1", "第 1 集", 0)
+	seedEpisodeFolder(t, db, "owner", "folder-2", "第 2 集", 1)
+	task, err := service.Create("owner", validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.DramaEditTask{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"status":                     model.DramaEditStatusProcessing,
+		"open_montage_production_id": "om-delete-active",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Delete("owner", DeleteRequest{IDs: []string{task.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 || !result[0].Deleted || len(runtime.cancelled) != 1 || runtime.cancelled[0] != "om-delete-active" {
+		t.Fatalf("result=%#v cancelled=%#v", result, runtime.cancelled)
+	}
+	if _, err := service.Get("owner", task.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted task get err=%v", err)
+	}
+}
+
+func TestDeleteProcessingTaskRetainsTaskWhenOpenMontageStopFails(t *testing.T) {
+	service, db := newTestService(t)
+	runtime := &recordingNativeRuntime{cancelErr: errors.New("runner unavailable")}
+	service.native = runtime
+	seedEpisodeFolder(t, db, "owner", "folder-1", "第 1 集", 0)
+	seedEpisodeFolder(t, db, "owner", "folder-2", "第 2 集", 1)
+	task, err := service.Create("owner", validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.DramaEditTask{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"status":                     model.DramaEditStatusProcessing,
+		"open_montage_production_id": "om-cannot-stop",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Delete("owner", DeleteRequest{IDs: []string{task.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 || result[0].Deleted || !strings.Contains(result[0].Reason, "停止 OpenMontage") {
+		t.Fatalf("result=%#v", result)
+	}
+	if _, err := service.Get("owner", task.ID); err != nil {
+		t.Fatalf("retained task get err=%v", err)
+	}
+}
+
+func TestProjectTaskKeepsOpenMontageBlockedReason(t *testing.T) {
+	service, db := newTestService(t)
+	service.native = &recordingNativeRuntime{state: NativeState{
+		ProductionID: "om-blocked",
+		Status:       "blocked",
+		CurrentStage: "compose",
+		Error:        "render report failed schema validation",
+	}}
+	seedEpisodeFolder(t, db, "owner", "folder-1", "第 1 集", 0)
+	seedEpisodeFolder(t, db, "owner", "folder-2", "第 2 集", 1)
+	task, err := service.Create("owner", validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.DramaEditTask{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"status":                     model.DramaEditStatusProcessing,
+		"open_montage_production_id": "om-blocked",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	projected, err := service.Get("owner", task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.Status != string(model.DramaEditStatusBlocked) || !strings.Contains(projected.ProductionError, "schema validation") {
+		t.Fatalf("projected=%#v", projected)
+	}
+}
+
+func TestDeleteEpisodeFilesRetainsSharedSourceUntilLastTask(t *testing.T) {
+	service, db := newTestService(t)
+	deleter := &recordingAssetDeleter{}
+	service.assetDeleter = deleter
+	seedEpisodeFolder(t, db, "owner", "folder-1", "第 1 集", 0)
+	seedEpisodeFolder(t, db, "owner", "folder-2", "第 2 集", 1)
+	first, err := service.Create("owner", validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Create("owner", validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.DramaEditTask{}).Where("id IN ?", []string{first.ID, second.ID}).Update("status", model.DramaEditStatusCompleted).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Delete("owner", DeleteRequest{IDs: []string{first.ID}, DeleteEpisodeFiles: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deleter.deleted) != 0 || len(result[0].EpisodeFiles) != 2 || !strings.Contains(result[0].EpisodeFiles[0].Reason, "其他短剧") {
+		t.Fatalf("shared result=%#v deleted=%#v", result, deleter.deleted)
+	}
+	result, err = service.Delete("owner", DeleteRequest{IDs: []string{second.ID}, DeleteEpisodeFiles: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deleter.deleted) != 2 || !result[0].EpisodeFiles[0].Deleted {
+		t.Fatalf("last result=%#v deleted=%#v", result, deleter.deleted)
 	}
 }
 
@@ -205,6 +392,9 @@ func TestApprovalBlocksWhenProductionSourcesAreUnavailable(t *testing.T) {
 	seedEpisodeFolder(t, db, "owner", "folder-2", "第 2 集", 1)
 	created, err := service.Create("owner", validRequest())
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("id IN ?", []string{"asset-folder-1-source", "asset-folder-2-source"}).Delete(&model.Resource{}).Error; err != nil {
 		t.Fatal(err)
 	}
 	blocked, err := service.Approve("owner", created.ID)

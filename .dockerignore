@@ -35,3 +35,8 @@ web/out
 .settings-key
 .env*
 !.env.example
+third_party/openmontage/.env
+third_party/openmontage/.venv
+third_party/openmontage/projects
+third_party/openmontage/**/__pycache__
+openmontage-runner/.pytest_cache
